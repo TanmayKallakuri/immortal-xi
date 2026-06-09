@@ -1,0 +1,72 @@
+[
+  {
+    "playerSeasonId": "ps-alfredo-di-stefano-1960",
+    "fields": { "overall": 98, "attack": 98, "control": 96, "clutch": 99, "uclAura": 99 },
+    "reason": "Scored in five consecutive European Cup finals (1956-1960) including a hat-trick in the 1960 final; Ballon d'Or 1957 & 1959. The formula cannot see pre-dataset domestic dominance.",
+    "authorNote": "game-design tuning from public award records (Ballon d'Or archive)",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-ferenc-puskas-1960",
+    "fields": { "overall": 97, "attack": 99, "clutch": 99, "uclAura": 97 },
+    "reason": "Four goals in the 1960 final, the most ever in a European Cup final; Olympic champion and consensus all-time great finisher.",
+    "authorNote": "game-design tuning from public match records",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-eusebio-1962",
+    "fields": { "overall": 96, "attack": 98, "clutch": 96, "uclAura": 95 },
+    "reason": "Two goals in the 1962 final against Real Madrid aged 20; Ballon d'Or 1965.",
+    "authorNote": "game-design tuning from public award records",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-johan-cruyff-1972",
+    "fields": { "overall": 98, "attack": 96, "control": 99, "uclAura": 98 },
+    "reason": "Both goals in the 1972 final; Ballon d'Or 1971, 1973, 1974; axis of the Total Football Ajax that won three straight European Cups.",
+    "authorNote": "game-design tuning from public award records",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-franz-beckenbauer-1974",
+    "fields": { "overall": 97, "defense": 98, "control": 96, "uclAura": 97 },
+    "reason": "Captain of three consecutive European Cup winners (1974-1976); Ballon d'Or 1972 & 1976; invented the modern libero role.",
+    "authorNote": "game-design tuning from public award records",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-gerd-muller-1974",
+    "fields": { "overall": 96, "attack": 99, "clutch": 98 },
+    "reason": "Two goals in the 1974 final replay; Ballon d'Or 1970; the highest goals-per-game ratio of any major European competition striker.",
+    "authorNote": "game-design tuning from public match records",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-paolo-maldini-1994",
+    "fields": { "overall": 96, "defense": 99, "physical": 94, "uclAura": 97 },
+    "reason": "Anchor of the 4-0 demolition of Barcelona in the 1994 final; played in eight European finals across 1989-2007.",
+    "authorNote": "game-design tuning from public match records",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-zinedine-zidane-2002",
+    "fields": { "overall": 97, "control": 99, "clutch": 98, "uclAura": 96 },
+    "reason": "Match-winning volley in the 2002 final, widely rated the greatest Champions League final goal; Ballon d'Or 1998.",
+    "authorNote": "game-design tuning from public match records",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-cristiano-ronaldo-2017",
+    "fields": { "overall": 98, "attack": 99, "clutch": 99, "uclAura": 99 },
+    "reason": "Two goals in the 2017 final; all-time Champions League top scorer; Ballon d'Or 2016 & 2017.",
+    "authorNote": "game-design tuning from public award records",
+    "date": "2026-06-09"
+  },
+  {
+    "playerSeasonId": "ps-lionel-messi-2011",
+    "fields": { "overall": 99, "attack": 99, "control": 99, "clutch": 97, "uclAura": 98 },
+    "reason": "Scored in the 2011 final and was man of the match; Ballon d'Or 2009-2012; peak of the 2011 Barcelona side often called the best club team ever.",
+    "authorNote": "game-design tuning from public award records",
+    "date": "2026-06-09"
+  }
+]

@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+*.tsbuildinfo
+next-env.d.ts
+data/immortal.db
+data/immortal.db-journal
+data/immortal.db-wal
+data/immortal.db-shm
+data/probe/
+data/raw/
+data/reports/
+public/game-data.json
+public/quality-report.json
+.env*
+
+.session-state/

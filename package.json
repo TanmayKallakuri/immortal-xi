@@ -1,0 +1,40 @@
+{
+  "name": "immortal-xi",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Draft an all-era European XI from real historical club-seasons and survive a full continental campaign.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "ingest": "tsx scripts/ingest/run.ts",
+    "clean": "tsx scripts/clean/run.ts",
+    "export-game-data": "tsx scripts/export/run.ts",
+    "data-quality-report": "tsx scripts/reports/run.ts",
+    "pipeline": "npm run ingest && npm run clean && npm run export-game-data && npm run data-quality-report",
+    "test:e2e": "tsx tests/e2e/smoke.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "drizzle-orm": "^0.44.2",
+    "next": "^15.3.4",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.67"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.1.10",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.1.8",
+    "@types/react-dom": "^19.1.6",
+    "drizzle-kit": "^0.31.1",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^4.1.10",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}
