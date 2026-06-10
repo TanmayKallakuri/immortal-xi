@@ -13,3 +13,6 @@ data/reports/
 .env*
 
 .session-state/
+
+.vercel/
+.vercel
