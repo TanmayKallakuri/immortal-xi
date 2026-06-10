@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { loadGameData, type GameDataIndex } from "../lib/data/game-data";
-import { simulateCampaign } from "../lib/simulation/campaign";
+import { simulateCampaign, STAGE_BANDS, type KnockoutTie } from "../lib/simulation/campaign";
 import { buildSide, simulateH2h } from "../lib/simulation/h2h";
 import { detectBadges } from "../lib/simulation/badges";
 import { simulateMatch, simulateExtraTime } from "../lib/simulation/engine";
@@ -134,6 +134,51 @@ describe("campaign", () => {
         expect(lost).toBeUndefined();
         expect(c.knockout[c.knockout.length - 1].round).toBe("final");
       }
+    }
+  });
+
+  it("knockout opponents respect their stage bands and escalate toward the final", () => {
+    const byStage = new Map<string, number[]>();
+    for (const s of ["esc1", "esc2", "esc3", "esc4", "esc5", "esc6", "esc7", "esc8", "esc9", "esc10"]) {
+      const { payload } = autoDraft(s);
+      const d = decodeSeed(encodeSeed(payload, index), index, SIM_VERSION);
+      if (!d.ok) throw new Error(d.error);
+      const c = simulateCampaign(d.payload, d.players, index);
+      for (const tie of c.knockout) {
+        byStage.set(tie.round, [...(byStage.get(tie.round) ?? []), tie.opponentStrength]);
+        const band = STAGE_BANDS[tie.round as KnockoutTie["round"]];
+        expect(tie.opponentStrength).toBeGreaterThanOrEqual(band.min - 6); // relaxed-draw tolerance
+        expect(tie.opponentStrength).toBeLessThanOrEqual(band.max + 2);
+      }
+    }
+    // averages must escalate wherever adjacent stages were both reached
+    const order: Array<KnockoutTie["round"]> = ["playoff", "r16", "qf", "sf", "final"];
+    const avg = (xs: number[]) => xs.reduce((a, b) => a + b, 0) / xs.length;
+    for (let i = 1; i < order.length; i++) {
+      const prev = byStage.get(order[i - 1]);
+      const cur = byStage.get(order[i]);
+      if (!prev || !cur || prev.length < 2 || cur.length < 2) continue;
+      expect(avg(cur)).toBeGreaterThanOrEqual(avg(prev) - 1);
+    }
+    expect(byStage.size).toBeGreaterThan(0); // at least one knockout reached across seeds
+  });
+
+  it("opponents never include the user's drafted club-seasons and never repeat a club", () => {
+    for (const s of ["ex1", "ex2", "ex3", "ex4"]) {
+      const { payload } = autoDraft(s);
+      const d = decodeSeed(encodeSeed(payload, index), index, SIM_VERSION);
+      if (!d.ok) throw new Error(d.error);
+      const c = simulateCampaign(d.payload, d.players, index);
+      const drafted = new Set(d.players.map((p) => p.clubSeasonId));
+      const facedClubs = new Map<string, number>();
+      const face = (csId: string) => {
+        expect(drafted.has(csId)).toBe(false);
+        const clubId = index.clubSeasonById.get(csId)?.clubId ?? csId;
+        facedClubs.set(clubId, (facedClubs.get(clubId) ?? 0) + 1);
+      };
+      for (const m of c.leagueMatches) face(m.opponentClubSeasonId);
+      for (const t of c.knockout) face(t.opponentClubSeasonId);
+      for (const [, n] of facedClubs) expect(n).toBe(1);
     }
   });
 

@@ -41,6 +41,11 @@ export interface GamePlayerSeason {
   /** European appearances/goals that season, where the source carries them */
   seasonApps: number | null;
   seasonGoals: number | null;
+  /** European starts that season (the "17" of a "17+1" apps cell) */
+  seasonStarts: number | null;
+  /** domestic league apps/goals that same season (capped rating context) */
+  leagueApps: number | null;
+  leagueGoals: number | null;
   careerFinals: number; // finals this player appears in across the dataset
   careerFinalWins: number;
   ratings: PlayerRatings;

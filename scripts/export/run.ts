@@ -57,6 +57,16 @@ async function main() {
     }
   }
 
+  // squads whose stats table covers >=8 players: a missing stats row there
+  // is evidence of non-involvement, not missing data
+  const statRowsByCs = new Map<string, number>();
+  for (const ps of playerSeasons) {
+    if (ps.continentalApps !== null) {
+      statRowsByCs.set(ps.clubSeasonId, (statRowsByCs.get(ps.clubSeasonId) ?? 0) + 1);
+    }
+  }
+  const squadHasStats = (csId: string) => (statRowsByCs.get(csId) ?? 0) >= 8;
+
   const gamePlayerSeasons: GamePlayerSeason[] = [];
   const exportedPsByClubSeason = new Map<string, string[]>();
   let suspicious = 0;
@@ -80,7 +90,11 @@ async function main() {
       teamTier: cs.progression as "W" | "RU" | "SF" | "QF" | "R16" | "GS" | "PART",
       finalGoals: ps.finalGoals,
       continentalApps: ps.continentalApps,
+      continentalStarts: ps.continentalStarts,
       continentalGoals: ps.continentalGoals,
+      leagueApps: ps.leagueApps,
+      leagueGoals: ps.leagueGoals,
+      squadHasStats: squadHasStats(ps.clubSeasonId),
       captain: ps.captain,
       careerFinals: career.n,
       careerFinalWins: career.wins,
@@ -126,6 +140,9 @@ async function main() {
       finalGoals: ps.finalGoals,
       seasonApps: ps.continentalApps,
       seasonGoals: ps.continentalGoals,
+      seasonStarts: ps.continentalStarts,
+      leagueApps: ps.leagueApps,
+      leagueGoals: ps.leagueGoals,
       careerFinals: career.n,
       careerFinalWins: career.wins,
       ratings,
@@ -138,26 +155,57 @@ async function main() {
     exportedPsByClubSeason.set(ps.clubSeasonId, list);
   }
 
-  // ---- club-season strength from CATEGORY (clean derives category for every
-  //      club-season from finals evidence, curation, or round reached) ----
-  // Strength is a deterministic game-design band (docs/SIMULATION.md).
+  // ---- club-season strength: CATEGORY base + squad-evidence quality ----
+  // The category base sets the historical-tier anchor (expanded scale so the
+  // very best club-seasons reach the mid-90s); the quality term moves a
+  // club-season relative to the AVERAGE squad of its own category, so a
+  // stacked champion separates from an ordinary one without era bias.
   const STRENGTH_BY_CATEGORY: Record<string, number> = {
-    champion: 86,
-    runner_up: 82,
-    semi_finalist: 78,
-    quarter_finalist: 75,
-    round_of_16: 72,
-    group_stage: 69,
-    group_stage_iconic: 71,
-    league_phase_iconic: 71,
+    champion: 88,
+    runner_up: 84,
+    semi_finalist: 80,
+    quarter_finalist: 76,
+    round_of_16: 73,
+    group_stage: 70,
+    group_stage_iconic: 72,
+    league_phase_iconic: 72,
     participant: 66,
   };
+  // top-11 average overall per squad, then per-category means for normalization
+  const gamePsById = new Map(gamePlayerSeasons.map((p) => [p.id, p]));
+  const topAvgByCs = new Map<string, number>();
+  for (const [csId, ids] of exportedPsByClubSeason) {
+    const overalls = ids
+      .map((id) => gamePsById.get(id)?.ratings.overall ?? 0)
+      .sort((a, b) => b - a)
+      .slice(0, 11);
+    if (overalls.length === 11) {
+      topAvgByCs.set(csId, overalls.reduce((s, v) => s + v, 0) / 11);
+    }
+  }
+  const categoryTopAvgs = new Map<string, number[]>();
+  for (const cs of clubSeasons) {
+    const avg = topAvgByCs.get(cs.id);
+    if (avg !== undefined) {
+      categoryTopAvgs.set(cs.category, [...(categoryTopAvgs.get(cs.category) ?? []), avg]);
+    }
+  }
+  const categoryMean = new Map<string, number>();
+  for (const [cat, avgs] of categoryTopAvgs) {
+    if (avgs.length >= 3) categoryMean.set(cat, avgs.reduce((s, v) => s + v, 0) / avgs.length);
+  }
   const strengthFor = (cs: (typeof clubSeasons)[number]): number => {
     const jitter = (hash32(cs.id) % 5) - 2; // -2..+2, stable per club-season
     const base = STRENGTH_BY_CATEGORY[cs.category] ?? 66;
     const tags = JSON.parse(cs.tags || "[]") as string[];
     const eyeTest = tags.includes("high_xg_or_eye_test_team") ? 2 : 0;
-    return Math.min(90, base + eyeTest + jitter);
+    const topAvg = topAvgByCs.get(cs.id);
+    const catMean = categoryMean.get(cs.category);
+    const quality =
+      topAvg !== undefined && catMean !== undefined
+        ? Math.max(-3, Math.min(6, (topAvg - catMean) * 1.2))
+        : 0;
+    return Math.max(60, Math.min(96, Math.round(base + quality + eyeTest + jitter)));
   };
 
   const gameClubSeasons: GameClubSeason[] = [];

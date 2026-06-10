@@ -137,6 +137,12 @@ export interface SquadListPlayer {
    *  stats table carries them ({{Efs player}}); null = not available */
   continentalApps: number | null;
   continentalGoals: number | null;
+  /** continental starts (the "17" of "17+1"); null when not available */
+  continentalStarts: number | null;
+  /** domestic league apps/goals that season, where the stats table names a
+   *  league competition; null = not available */
+  leagueApps: number | null;
+  leagueGoals: number | null;
 }
 
 export interface ParsedSquadPage {
@@ -169,60 +175,136 @@ function splitTemplateBody(body: string): string[] {
   return parts;
 }
 
-/** "17+1" (starts+sub appearances) -> 18; "34" -> 34 */
-function parseApps(cell: string): number | null {
+/** "17+1" (starts+sub appearances) -> {starts:17, total:18}; "34" -> {34, 34} */
+function parseAppsParts(cell: string): { starts: number; total: number } | null {
   const m = cell.trim().match(/^(\d+)(?:\s*\+\s*(\d+))?$/);
   if (!m) return null;
-  return parseInt(m[1], 10) + (m[2] ? parseInt(m[2], 10) : 0);
+  const starts = parseInt(m[1], 10);
+  return { starts, total: starts + (m[2] ? parseInt(m[2], 10) : 0) };
+}
+
+const EUROPE_COMP_RE = /champions\s*league|european\s*cup(?!\s*winners)/i;
+const EUROPE_COMP_FALLBACK_RE = /\buefa\b|europe/i;
+const CUP_COMP_RE =
+  /\bcup\b|\bcoppa\b|\bcopa\b|\bpokal\b|\bcoupe\b|ta[cç]a|\bbeker\b|shield|super\s*cup|supercopa|supercoppa|troph|charity|playoff|play-off/i;
+
+/** Classify {{Efs start|comp1|comp2|...}} headers into europe/league pair indexes. */
+function classifyEfsComps(comps: string[]): { europeIdx: number; leagueIdx: number } {
+  let europeIdx = comps.findIndex((c) => EUROPE_COMP_RE.test(c));
+  if (europeIdx === -1) europeIdx = comps.findIndex((c) => EUROPE_COMP_FALLBACK_RE.test(c));
+  let leagueIdx = comps.findIndex((c, i) => i !== europeIdx && !CUP_COMP_RE.test(c) && !EUROPE_COMP_FALLBACK_RE.test(c));
+  return { europeIdx, leagueIdx };
+}
+
+interface ParsedStatRow {
+  europeApps: number | null;
+  europeGoals: number | null;
+  europeStarts: number | null;
+  leagueApps: number | null;
+  leagueGoals: number | null;
+}
+
+/** Pull the europe/league (apps, goals) pairs out of an Efs row's stat cells. */
+function statPairsFor(positional: string[], comps: string[] | null): ParsedStatRow | null {
+  if (positional.length < 4 || positional.length % 2 !== 0) return null;
+  const pairs: Array<[string, string]> = [];
+  for (let i = 0; i < positional.length; i += 2) pairs.push([positional[i], positional[i + 1]]);
+
+  let europePair: [string, string] | null = null;
+  let leaguePair: [string, string] | null = null;
+  if (comps && (pairs.length === comps.length || pairs.length === comps.length + 1)) {
+    // header-named columns (an extra trailing pair is the Total column)
+    const { europeIdx, leagueIdx } = classifyEfsComps(comps);
+    if (europeIdx >= 0) europePair = pairs[europeIdx];
+    if (leagueIdx >= 0) leaguePair = pairs[leagueIdx];
+  }
+  if (!europePair) {
+    // legacy heuristic for un-headered tables:
+    // 3 pairs: league/cup/europe -> last; 4+ pairs: assume total last -> third
+    europePair = pairs.length <= 3 ? pairs[pairs.length - 1] : pairs[2];
+    if (pairs.length >= 2 && !leaguePair) leaguePair = pairs[0];
+  }
+  const eu = parseAppsParts(europePair[0]);
+  const lg = leaguePair ? parseAppsParts(leaguePair[0]) : null;
+  return {
+    europeApps: eu?.total ?? null,
+    europeStarts: eu?.starts ?? null,
+    europeGoals: europePair ? (parseAppsParts(europePair[1])?.total ?? null) : null,
+    leagueApps: lg?.total ?? null,
+    leagueGoals: leaguePair ? (parseAppsParts(leaguePair[1])?.total ?? null) : null,
+  };
 }
 
 /**
  * Parse the first-team squad from a Wikipedia club-season article.
  *
- * Handles two template families:
- *  - {{fs player|no=|nat=|pos=|name=}}: squad membership only.
- *  - {{Efs player|no=|nat=|pos=|name=| <stat cells> }}: membership + season
- *    statistics. Cells come in (apps, goals) pairs per competition; the
- *    European pair is the LAST pair when 3 pairs are present (league, cup,
- *    europe) and the third pair when 4+ are present (…, europe, total).
+ * Membership comes from the first-team squad section ({{fs player}} /
+ * {{Efs player}} / {{fb si player}} rows up to the first reserves/loans/
+ * transfers heading). Season statistics come from {{Efs player}} rows found
+ * ANYWHERE on the page (most articles keep a separate
+ * "Statistics → Appearances and goals" section) and are merged into the
+ * squad members by wikilink identity — a stats row for a player outside the
+ * first-team squad is ignored, never added.
  *
- * Sections for reserves / loans / departures are cut off before parsing.
- * Anything off-shape becomes an anomaly, never a guess.
+ * Stat cells come in (apps, goals) pairs per competition. When the table's
+ * {{Efs start|...}} header names the competitions, the European and domestic
+ * league pairs are matched by name; otherwise the legacy positional
+ * heuristic applies. Anything off-shape becomes an anomaly, never a guess.
  */
+interface SquadRow {
+  key: string;
+  player: SquadListPlayer;
+  inScope: boolean;
+  hasStats: boolean;
+  stats: ParsedStatRow | null;
+}
+
 export function parseSquadPage(wikitext: string): ParsedSquadPage {
   const anomalies: string[] = [];
-  const players: SquadListPlayer[] = [];
-  const seen = new Set<string>();
 
-  // Cut at the first non-first-team section heading AFTER the squad list
-  // begins (transfer sections often precede the squad in these articles).
-  const TPL_START = /\{\{\s*(efs player|fs player|football squad player|fb si player)\b/gi;
-  const firstTpl = wikitext.search(/\{\{\s*(?:efs player|fs player|football squad player|fb si player)\b/i);
-  let scope = wikitext;
+  // Membership scope: cut at the first non-first-team section heading AFTER
+  // the squad list begins (transfer sections often precede the squad).
+  const firstTpl = wikitext.search(
+    /\{\{\s*(?:efs player2?|fs player2?|football squad player2?|fb si player)\b/i,
+  );
+  let scopeEnd = wikitext.length;
   if (firstTpl >= 0) {
     const after = wikitext.slice(firstTpl);
     const cutMatch = after.match(
       /^=+\s*(?:out on loan|on loan|loaned out|reserves?(?: squad| team)?|academy|youth|b team|left (?:the club|during)|transfers)\b[^=]*=+\s*$/im,
     );
     if (cutMatch && cutMatch.index !== undefined) {
-      scope = wikitext.slice(0, firstTpl + cutMatch.index);
+      scopeEnd = firstTpl + cutMatch.index;
     }
   }
+
+  // Single document-order walk over Efs headers + player rows so each stats
+  // row resolves against the {{Efs start}} header governing its table.
+  const WALK_RE = /\{\{\s*(efs start|efs player2?|fs player2?|football squad player2?|fb si player)\b/gi;
+  let comps: string[] | null = null; // competitions named by the current Efs table
+  const rows: SquadRow[] = [];
   let m: RegExpExecArray | null;
-  let statRows = 0;
-  while ((m = TPL_START.exec(scope)) !== null) {
-    // brace-matched extraction: rows may nest templates ({{Age|...}} etc.)
-    const tpl = extractTemplate(scope, m.index);
+  while ((m = WALK_RE.exec(wikitext)) !== null) {
+    const tpl = extractTemplate(wikitext, m.index);
     if (!tpl) continue;
-    TPL_START.lastIndex = m.index + tpl.length;
-    const isEfs = m[1].toLowerCase().startsWith("efs");
+    WALK_RE.lastIndex = m.index + tpl.length;
+    const kind = m[1].toLowerCase();
+    if (kind === "efs start") {
+      comps = splitTemplateBody(tpl.slice(2, -2))
+        .slice(1)
+        .map((c) => stripMarkup(c))
+        .filter(Boolean);
+      continue;
+    }
+    const isEfs = kind.startsWith("efs");
     const parts = splitTemplateBody(tpl.slice(2, -2)).slice(1); // [0] is the template name
     const named: Record<string, string> = {};
     const positional: string[] = [];
     for (const part of parts) {
       const eq = part.indexOf("=");
-      if (eq > -1 && /^[a-z]+\s*$/i.test(part.slice(0, eq))) {
-        named[part.slice(0, eq).trim().toLowerCase()] = part.slice(eq + 1).trim();
+      const paramKey = eq > -1 ? part.slice(0, eq).trim() : "";
+      if (eq > -1 && /^[a-z]+$/i.test(paramKey)) {
+        named[paramKey.toLowerCase()] = part.slice(eq + 1).trim();
       } else if (part.trim()) {
         positional.push(part.trim());
       }
@@ -232,6 +314,9 @@ export function parseSquadPage(wikitext: string): ParsedSquadPage {
     const link = nameRaw.match(/\[\[([^|\]]+)(?:\|([^\]]*))?\]\]/);
     const displayName = (link ? (link[2] ?? link[1]) : nameRaw.replace(/\{\{[^}]*\}\}/g, "")).trim();
     if (!displayName) continue;
+    const key = link ? link[1].trim() : displayName;
+    const stats = isEfs ? statPairsFor(positional, comps) : null;
+
     // explicit multi-position support: "DF/MF" -> ["DF","MF"]; never invented
     const posCodes = (named["pos"] ?? "")
       .split(/[/,;]/)
@@ -239,41 +324,95 @@ export function parseSquadPage(wikitext: string): ParsedSquadPage {
       .filter((p) => ["GK", "DF", "MF", "FW"].includes(p) || posToGroup(p).confident);
     const posRaw = posCodes[0];
     if (!posRaw) {
-      anomalies.push(`unrecognized squad position "${named["pos"] ?? ""}" for ${displayName}`);
+      if (m.index < scopeEnd) anomalies.push(`unrecognized squad position "${named["pos"] ?? ""}" for ${displayName}`);
       continue;
     }
-    const key = link ? link[1].trim() : displayName;
-    if (seen.has(key)) continue; // some articles repeat the squad table
-    seen.add(key);
-
-    let continentalApps: number | null = null;
-    let continentalGoals: number | null = null;
-    if (isEfs && positional.length >= 4 && positional.length % 2 === 0) {
-      const pairs: Array<[string, string]> = [];
-      for (let i = 0; i < positional.length; i += 2) pairs.push([positional[i], positional[i + 1]]);
-      // 3 pairs: league/cup/europe -> last; 4+ pairs: assume total last -> third
-      const europePair = pairs.length <= 3 ? pairs[pairs.length - 1] : pairs[2];
-      continentalApps = parseApps(europePair[0]);
-      continentalGoals = parseApps(europePair[1]);
-      if (continentalApps !== null) statRows++;
-    }
-
     const noRaw = named["no"] ?? named["n"];
     const natRaw = named["nat"] ?? named["nb"];
-    players.push({
-      shirt: noRaw && /^\d{1,2}$/.test(noRaw) ? parseInt(noRaw, 10) : null,
-      nationality: natRaw ? natRaw.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 3) || null : null,
-      pos: posRaw,
-      positions: posCodes,
-      linkTarget: link ? link[1].trim() : null,
-      displayName,
-      continentalApps,
-      continentalGoals,
+    rows.push({
+      key,
+      inScope: m.index < scopeEnd,
+      hasStats: stats !== null,
+      stats,
+      player: {
+        shirt: noRaw && /^\d{1,2}$/.test(noRaw) ? parseInt(noRaw, 10) : null,
+        nationality: natRaw ? natRaw.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 3) || null : null,
+        pos: posRaw,
+        positions: posCodes,
+        linkTarget: link ? link[1].trim() : null,
+        displayName,
+        continentalApps: stats?.europeApps ?? null,
+        continentalGoals: stats?.europeGoals ?? null,
+        continentalStarts: stats?.europeStarts ?? null,
+        leagueApps: stats?.leagueApps ?? null,
+        leagueGoals: stats?.leagueGoals ?? null,
+      },
     });
   }
+
+  // Membership: the in-scope squad list, UNLESS the appearances table tells a
+  // different story (some pages keep the first team in a raw wikitable while
+  // {{fs player}} rows list reserves/loans — then the stats table, which holds
+  // the players who actually featured, is the truthful first-team source).
+  const dedupe = (list: SquadRow[]): Map<string, SquadRow> => {
+    const out = new Map<string, SquadRow>();
+    for (const r of list) if (!out.has(r.key)) out.set(r.key, r);
+    return out;
+  };
+  const scopeRows = dedupe(rows.filter((r) => r.inScope));
+  const statRowsAll = dedupe(rows.filter((r) => r.hasStats));
+  const statHasXi = statRowsAll.size >= 11 && [...statRowsAll.values()].some((r) => r.player.pos === "GK");
+  let overlap = 0;
+  for (const key of statRowsAll.keys()) if (scopeRows.has(key)) overlap++;
+  const overlapRatio = statRowsAll.size > 0 ? overlap / Math.min(scopeRows.size || 1, statRowsAll.size) : 1;
+
+  let membership: Map<string, SquadRow>;
+  if (statHasXi && (scopeRows.size < 11 || overlapRatio < 0.3)) {
+    membership = statRowsAll;
+    if (scopeRows.size > 0) {
+      anomalies.push(
+        `squad list (${scopeRows.size} players) does not match the appearances table (${statRowsAll.size}); membership taken from the appearances table`,
+      );
+    }
+  } else {
+    membership = scopeRows;
+  }
+
+  // merge stats rows into membership by identity
+  const statsByKey = new Map<string, ParsedStatRow>();
+  for (const r of rows) if (r.stats) statsByKey.set(r.key, r.stats);
+  const players: SquadListPlayer[] = [];
+  for (const [key, row] of membership) {
+    const p = row.player;
+    const s = statsByKey.get(key);
+    if (s && p.continentalApps === null) {
+      p.continentalApps = s.europeApps;
+      p.continentalGoals = s.europeGoals;
+      p.continentalStarts = s.europeStarts;
+      p.leagueApps = s.leagueApps;
+      p.leagueGoals = s.leagueGoals;
+    }
+    players.push(p);
+  }
+
+  // All-zero European column safety net: every curated club-season played
+  // deep into Europe, so a stats table where NOBODY has a European appearance
+  // means the column mapping is wrong or the page never filled it — drop the
+  // continental columns (uncertainty), keep the domestic ones.
+  const statted = players.filter((p) => p.continentalApps !== null);
+  if (statted.length > 0 && !players.some((p) => (p.continentalApps ?? 0) > 0 || (p.continentalGoals ?? 0) > 0)) {
+    for (const p of players) {
+      p.continentalApps = null;
+      p.continentalGoals = null;
+      p.continentalStarts = null;
+    }
+    anomalies.push("European stats column is all zeros — continental stats dropped as unreliable");
+  }
+
+  const statRows = players.filter((p) => p.continentalApps !== null).length;
   if (players.length === 0) anomalies.push("no squad-list templates found");
   else if (players.length < 11) anomalies.push(`only ${players.length} squad players parsed`);
-  if (players.length > 30) anomalies.push(`${players.length} squad players parsed — section cutoff may have missed`);
+  if (players.length > 40) anomalies.push(`${players.length} squad players parsed — section cutoff may have missed`);
   if (players.length > 0 && !players.some((p) => p.pos === "GK")) anomalies.push("no goalkeeper in squad list");
   return { players, hasSeasonStats: statRows >= 8, anomalies };
 }

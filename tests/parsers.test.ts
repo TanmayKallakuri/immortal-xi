@@ -169,6 +169,33 @@ const SQUAD_PAGE_FBSI = `
 {{fb si player |p=[[Right Back]] |nb=ESP |n=2 |pos=RB |age={{Age|1985|1|10|2013|6|30}} |a=30 |g=1 }}
 `;
 
+const SQUAD_PAGE_SPLIT = `
+==Squad==
+{{Fs player|no=1 |nat=BRA|pos=GK|name=[[Keeper One]]}}
+{{Fs player|no=4 |nat=NED|pos=DF|name=[[Centre Back]]}}
+{{Fs player|no=10|nat=SRB|pos=MF|name=[[Star Creator]]}}
+{{Fs player|no=29|nat=FRA|pos=FW|name=[[Young Breakout]]}}
+{{Fs player|no=40|nat=FRA|pos=GK|name=[[Third Keeper]]}}
+==Transfers==
+prose
+==Statistics==
+===Appearances and goals===
+{{Efs start|[[2016–17 Ligue 1|Ligue 1]]|[[Coupe de France]]|[[Coupe de la Ligue]]|[[2016–17 UEFA Champions League|Champions League]]}}
+{{Efs player| no=1  |name=[[Keeper One]]|pos=GK|nat=BRA   |36|0|0|0|4|0|14|0}}
+{{Efs player| no=4  |name=[[Centre Back]]|pos=DF|nat=NED  |33+1|2|2|0|1|0|13|1}}
+{{Efs player2|no=10 |name=[[Star Creator]]|pos=MF|nat=SRB |34+3|8|2|1|2|0|15+1|3}}
+{{Efs player| no=29 |name=[[Young Breakout]]|pos=FW|nat=FRA |14+15|15|2|2|3|4|6+3|6}}
+{{Efs player| no=99 |name=[[Departed Mid Season]]|pos=FW|nat=GER |9|2|0|0|2|0|11|2}}
+{{Efs end}}
+`;
+
+const SQUAD_PAGE_ZERO_EUROPE = `
+==Squad==
+{{Efs player|no=1 |name=[[Solid Keeper]]|pos=GK|nat=ITA |32|0|1|0|0|0|}}
+{{Efs player|no=10|name=[[League Star]]|pos=MF|nat=ITA  |36|12|3|1|0|0|}}
+{{Efs player|no=9 |name=[[League Striker]]|pos=FW|nat=ITA |30|18|4|2|0|0|}}
+`;
+
 describe("parseSquadPage", () => {
   const efs = parseSquadPage(SQUAD_PAGE_EFS);
 
@@ -176,7 +203,10 @@ describe("parseSquadPage", () => {
     expect(efs.hasSeasonStats).toBe(false); // <8 stat rows in fixture
     const star = efs.players.find((p) => p.displayName === "Star Creator")!;
     expect(star.continentalApps).toBe(18); // 17+1
+    expect(star.continentalStarts).toBe(17);
     expect(star.continentalGoals).toBe(9);
+    expect(star.leagueApps).toBe(34);
+    expect(star.leagueGoals).toBe(28);
     const fringe = efs.players.find((p) => p.displayName === "Fringe Striker")!;
     expect(fringe.continentalApps).toBe(1); // 0+1
   });
@@ -184,6 +214,34 @@ describe("parseSquadPage", () => {
   it("cuts off loan/reserve sections after the squad begins", () => {
     expect(efs.players.some((p) => p.displayName === "Loaned Away")).toBe(false);
     expect(efs.players).toHaveLength(4);
+  });
+
+  it("merges a separate appearances table into the squad list by named competition", () => {
+    const split = parseSquadPage(SQUAD_PAGE_SPLIT);
+    expect(split.players).toHaveLength(5);
+    const young = split.players.find((p) => p.displayName === "Young Breakout")!;
+    expect(young.continentalApps).toBe(9); // 6+3 from the Champions League pair
+    expect(young.continentalStarts).toBe(6);
+    expect(young.continentalGoals).toBe(6);
+    expect(young.leagueApps).toBe(29); // 14+15 from the named Ligue 1 pair
+    expect(young.leagueGoals).toBe(15);
+    // {{Efs player2}} rows and leading-space params parse too
+    const star = split.players.find((p) => p.displayName === "Star Creator")!;
+    expect(star.continentalApps).toBe(16);
+    expect(star.continentalGoals).toBe(3);
+    // a stats row for a non-squad player is never added to the squad
+    expect(split.players.some((p) => p.displayName === "Departed Mid Season")).toBe(false);
+    // the third keeper has no stats row: stays null (handled as evidence downstream)
+    expect(split.players.find((p) => p.displayName === "Third Keeper")!.continentalApps).toBeNull();
+  });
+
+  it("drops an all-zero European column as unreliable instead of treating it as evidence", () => {
+    const zero = parseSquadPage(SQUAD_PAGE_ZERO_EUROPE);
+    const star = zero.players.find((p) => p.displayName === "League Star")!;
+    expect(star.continentalApps).toBeNull();
+    expect(star.leagueApps).toBe(36); // domestic stats are kept
+    expect(star.leagueGoals).toBe(12);
+    expect(zero.anomalies.some((a) => a.includes("all zeros"))).toBe(true);
   });
 
   it("parses fb si squads with nested templates and specific position codes", () => {

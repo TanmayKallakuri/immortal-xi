@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS club_aliases (
 CREATE TABLE IF NOT EXISTS club_seasons (
   id TEXT PRIMARY KEY, club_id TEXT NOT NULL, season_id TEXT NOT NULL, progression TEXT NOT NULL,
   category TEXT NOT NULL DEFAULT 'participant', tags TEXT NOT NULL DEFAULT '[]',
+  squad_completeness TEXT NOT NULL DEFAULT 'low_confidence',
   final_score TEXT, squad_complete INTEGER NOT NULL DEFAULT 0, starter_count INTEGER NOT NULL DEFAULT 0,
   player_count INTEGER NOT NULL DEFAULT 0, has_goalkeeper INTEGER NOT NULL DEFAULT 0,
   confidence_score REAL NOT NULL DEFAULT 0, confidence_label TEXT NOT NULL DEFAULT 'low',
@@ -62,7 +63,9 @@ CREATE TABLE IF NOT EXISTS player_seasons (
   pos TEXT NOT NULL, positions TEXT NOT NULL DEFAULT '[]',
   pos_group TEXT NOT NULL, pos_inferred INTEGER NOT NULL DEFAULT 0,
   shirt INTEGER, nationality TEXT, captain INTEGER NOT NULL DEFAULT 0, role TEXT NOT NULL,
+  squad_role TEXT NOT NULL DEFAULT 'unknown',
   final_goals INTEGER NOT NULL DEFAULT 0, continental_apps INTEGER, continental_goals INTEGER,
+  continental_starts INTEGER, league_apps INTEGER, league_goals INTEGER,
   confidence_score REAL NOT NULL DEFAULT 0,
   confidence_label TEXT NOT NULL DEFAULT 'low', needs_review INTEGER NOT NULL DEFAULT 0,
   review_reason TEXT, source_record_id TEXT

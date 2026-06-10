@@ -30,6 +30,8 @@ const gameDataSchema = z.object({
       shirt: z.number().nullable(), nationality: z.string().nullable(),
       captain: z.boolean(), role: z.enum(["starter", "sub", "bench", "squad"]),
       finalGoals: z.number(), seasonApps: z.number().nullable(), seasonGoals: z.number().nullable(),
+      seasonStarts: z.number().nullable().default(null),
+      leagueApps: z.number().nullable().default(null), leagueGoals: z.number().nullable().default(null),
       careerFinals: z.number(), careerFinalWins: z.number(),
       ratings: ratingsSchema,
       confidence: z.object({ score: z.number(), label: z.enum(["high", "medium", "low"]) }),

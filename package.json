@@ -14,7 +14,8 @@
     "export-game-data": "tsx scripts/export/run.ts",
     "data-quality-report": "tsx scripts/reports/run.ts",
     "rating-audit": "tsx scripts/reports/rating-audit.ts",
-    "pipeline": "npm run ingest && npm run clean && npm run export-game-data && npm run data-quality-report && npm run rating-audit",
+    "sim-audit": "tsx scripts/reports/sim-audit.ts",
+    "pipeline": "npm run ingest && npm run clean && npm run export-game-data && npm run data-quality-report && npm run rating-audit && npm run sim-audit",
     "test:e2e": "tsx tests/e2e/smoke.ts"
   },
   "dependencies": {

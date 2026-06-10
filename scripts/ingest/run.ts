@@ -158,6 +158,51 @@ async function main() {
     console.error(`[club-season-pages] BLOCKED: ${e}`);
   }
 
+  // ---- 3b. finalist club-season squad pages (full-squad expansion) ----
+  // Finalists previously carried final-day lineups only. Their club-season
+  // articles add registered/reserve/fringe players. Titles are derived from
+  // the finals list; missing articles (mostly pre-1995) just leave the team
+  // flagged lineup_only — never fabricated.
+  try {
+    const finalsRaw = loadRaw("wikipedia-finals-list", FINALS_LIST_PAGE);
+    if (finalsRaw) {
+      const { rows } = parseFinalsList(finalsRaw.payload);
+      const titles = new Set<string>();
+      for (const r of rows) {
+        for (const club of [r.winnerLink, r.runnerUpLink]) {
+          titles.add(`${r.seasonRaw} ${club.replace(/\s*\([^)]*\)$/, "")} season`);
+        }
+      }
+      let ok = 0;
+      let missing = 0;
+      for (const title of titles) {
+        try {
+          if (loadRaw("wikipedia-club-season-pages", title)) {
+            ok++;
+            continue;
+          }
+          const { wikitext, url } = await fetchWikitext(title);
+          saveRaw(db, {
+            sourceId: "wikipedia-club-season-pages",
+            recordKey: title,
+            url,
+            retrievedAt: new Date().toISOString(),
+            parserVersion: PARSER_VERSION,
+            payload: wikitext,
+          });
+          ok++;
+          await sleep(220);
+        } catch {
+          missing++; // flagged downstream as lineup_only
+        }
+      }
+      console.log(`[finalist-squad-pages] ${ok} fetched/cached, ${missing} without articles`);
+      log.sources["wikipedia-club-season-pages-finalists"] = { status: "ok", note: `${ok} ok / ${missing} missing`, records: ok };
+    }
+  } catch (e) {
+    console.error(`[finalist-squad-pages] skipped: ${e}`);
+  }
+
   // ---- 4. footballcsv match results ----
   try {
     // One git-trees API call (rate-limit friendly), then raw downloads.
