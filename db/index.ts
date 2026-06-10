@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS player_aliases (
 );
 CREATE TABLE IF NOT EXISTS player_seasons (
   id TEXT PRIMARY KEY, player_id TEXT NOT NULL, club_season_id TEXT NOT NULL,
-  pos TEXT NOT NULL, pos_group TEXT NOT NULL, pos_inferred INTEGER NOT NULL DEFAULT 0,
+  pos TEXT NOT NULL, positions TEXT NOT NULL DEFAULT '[]',
+  pos_group TEXT NOT NULL, pos_inferred INTEGER NOT NULL DEFAULT 0,
   shirt INTEGER, nationality TEXT, captain INTEGER NOT NULL DEFAULT 0, role TEXT NOT NULL,
   final_goals INTEGER NOT NULL DEFAULT 0, continental_apps INTEGER, continental_goals INTEGER,
   confidence_score REAL NOT NULL DEFAULT 0,

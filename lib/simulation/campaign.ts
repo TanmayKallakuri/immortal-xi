@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Solo campaign: modern league-phase format (36 teams, 8 matches, top 8
  * straight to the round of 16, 9-24 into a knockout play-off), then
  * two-legged knockouts and a single neutral final. No away goals; extra time
@@ -83,8 +83,13 @@ export interface CampaignResult {
   keyMoments: Array<{ stage: string; text: string }>;
 }
 
-function opponentSide(cs: GameClubSeason): SideInput {
+function opponentSide(cs: GameClubSeason, index: GameDataIndex): SideInput {
   const s = cs.teamStrength;
+  // real squad players for event attribution whenever the club-season has them
+  const squad = cs.playerSeasonIds
+    .map((id) => index.playerSeasonById.get(id))
+    .filter(Boolean) as GamePlayerSeason[];
+  const gk = squad.find((p) => p.posGroup === "GK");
   return {
     name: `${cs.clubName} ${cs.season}`,
     attack: s + 2,
@@ -95,6 +100,8 @@ function opponentSide(cs: GameClubSeason): SideInput {
     aura: cs.progression === "W" ? s + 6 : s,
     chemistry: 5,
     confidence: Math.max(0.7, cs.confidence.score),
+    scorers: squad.length > 0 ? squad : undefined,
+    keeperName: gk?.name,
   };
 }
 
@@ -123,7 +130,7 @@ export function drawOpponents(rng: Rng, index: GameDataIndex, excludeClubSeasonI
       if (taken >= need) break;
       if (usedClubs.has(cs.clubId)) continue; // one season per club in the field
       usedClubs.add(cs.clubId);
-      out.push({ clubSeason: cs, side: opponentSide(cs), pot: (p + 1) as 1 | 2 | 3 | 4 });
+      out.push({ clubSeason: cs, side: opponentSide(cs, index), pot: (p + 1) as 1 | 2 | 3 | 4 });
       taken++;
     }
     // fallback if club-diversity starves a pot (cannot happen with 500 clubs, but stay safe)
@@ -131,7 +138,7 @@ export function drawOpponents(rng: Rng, index: GameDataIndex, excludeClubSeasonI
     while (taken < need && i < shuffled.length) {
       const cs = shuffled[i++];
       if (out.some((o) => o.clubSeason.id === cs.id)) continue;
-      out.push({ clubSeason: cs, side: opponentSide(cs), pot: (p + 1) as 1 | 2 | 3 | 4 });
+      out.push({ clubSeason: cs, side: opponentSide(cs, index), pot: (p + 1) as 1 | 2 | 3 | 4 });
       taken++;
     }
   }

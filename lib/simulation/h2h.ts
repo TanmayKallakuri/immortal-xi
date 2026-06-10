@@ -64,6 +64,7 @@ function sideInput(label: string, side: H2hSide): SideInput {
     chemistry: p.chemistry,
     confidence: p.avgConfidence,
     scorers: side.players,
+    keeperName: side.players.find((pl) => pl.posGroup === "GK")?.name,
   };
 }
 

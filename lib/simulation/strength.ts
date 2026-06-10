@@ -4,7 +4,7 @@
  */
 import type { GameDataIndex } from "../data/game-data";
 import type { GamePlayerSeason } from "../types";
-import { formationById, slotFit, type Formation } from "../draft/formations";
+import { formationById, slotFitForPositions, type Formation } from "../draft/formations";
 
 export interface XiSlotAssignment {
   slotId: string;
@@ -51,7 +51,7 @@ export function computeTeamProfile(
   for (const a of assignments) {
     const slot = slotById.get(a.slotId);
     if (!slot) throw new Error(`assignment to unknown slot ${a.slotId}`);
-    const fit = slotFit(a.player.pos, a.player.posGroup, slot);
+    const fit = slotFitForPositions(a.player.positions, a.player.posGroup, slot);
     if (fit <= 0) throw new Error(`invalid XI: ${a.player.name} in ${slot.id}`);
     fitSum += fit;
     const r = a.player.ratings;
@@ -133,7 +133,7 @@ export function computeTeamProfile(
   // severe position mismatches
   for (const a of assignments) {
     const slot = slotById.get(a.slotId)!;
-    const fit = slotFit(a.player.pos, a.player.posGroup, slot);
+    const fit = slotFitForPositions(a.player.positions, a.player.posGroup, slot);
     if (fit > 0 && fit <= 0.8) {
       chem -= 3;
       links.push({

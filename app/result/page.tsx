@@ -12,6 +12,21 @@ import { formationById } from "@/lib/draft/formations";
 import { SIM_VERSION } from "@/lib/simulation/version";
 import { simulateCampaign, type CampaignResult, type PlayedMatch, type KnockoutTie } from "@/lib/simulation/campaign";
 import { detectBadges } from "@/lib/simulation/badges";
+import {
+  advance,
+  clockDone,
+  matchDone,
+  liveScore,
+  livePenScore,
+  visibleEvents,
+  visibleKicks,
+  skipToEnd,
+  phaseLabel,
+  SPEED_MS,
+  PEN_KICK_MS,
+  type LiveSpeed,
+  type LiveState,
+} from "@/lib/simulation/live";
 
 export default function ResultPage() {
   return (
@@ -40,9 +55,8 @@ function CopyButton({ text, label, primary = false }: { text: string; label: str
   );
 }
 
-/** The campaign as an ordered list of reveal steps — suspense by default. */
 interface Step {
-  kind: "league" | "table" | "tie-intro" | "leg" | "verdict";
+  kind: "league" | "table" | "leg" | "verdict";
   leagueIndex?: number;
   tie?: KnockoutTie;
   legIndex?: number;
@@ -63,19 +77,15 @@ function ResultInner() {
   const { index, error } = useGameData();
   const params = useSearchParams();
 
-  // accept ?seed=<full> or ?c=<compact code resolved from this device>
   const rawSeed = params.get("seed") ?? "";
   const codeParam = params.get("c") ?? "";
   const [resolved, setResolved] = useState<{ seed: string | null; error?: string } | null>(null);
   useEffect(() => {
-    if (rawSeed) {
-      setResolved({ seed: rawSeed });
-    } else if (codeParam) {
+    if (rawSeed) setResolved({ seed: rawSeed });
+    else if (codeParam) {
       const r = resolveSeedInput(codeParam, localStorageRegistry());
       setResolved({ seed: r.seed, error: r.error });
-    } else {
-      setResolved({ seed: null });
-    }
+    } else setResolved({ seed: null });
   }, [rawSeed, codeParam]);
   const seed = resolved?.seed ?? "";
 
@@ -88,7 +98,6 @@ function ResultInner() {
     return { decoded, campaign, badges, steps: buildSteps(campaign) } as const;
   }, [index, seed]);
 
-  // compact code for sharing (saved locally; deterministic per seed)
   const [code, setCode] = useState<string | null>(null);
   useEffect(() => {
     if (seed && computed && !("error" in computed)) {
@@ -100,19 +109,19 @@ function ResultInner() {
     }
   }, [seed, computed]);
 
-  // progressive reveal — starts sealed; the user kicks the campaign off
+  // progressive reveal: one step at a time; matches must PLAY OUT before
+  // the next step unlocks. Skip-to-verdict finishes everything instantly.
   const [revealedCount, setRevealedCount] = useState(0);
-  const [autoplay, setAutoplay] = useState(false);
-  const autoplayRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [liveDone, setLiveDone] = useState(true);
+  const [speed, setSpeed] = useState<LiveSpeed>("normal");
   const total = computed && !("error" in computed) ? computed.steps.length : 0;
-  useEffect(() => {
-    if (autoplay && revealedCount < total) {
-      autoplayRef.current = setInterval(() => setRevealedCount((n) => Math.min(total, n + 1)), 1700);
-      return () => {
-        if (autoplayRef.current) clearInterval(autoplayRef.current);
-      };
-    }
-  }, [autoplay, revealedCount, total]);
+
+  const revealNext = () => {
+    if (!computed || "error" in computed) return;
+    const next = computed.steps[revealedCount];
+    setLiveDone(!(next && (next.kind === "league" || next.kind === "leg")));
+    setRevealedCount((n) => Math.min(total, n + 1));
+  };
 
   if (error) return <ArchiveLoading label={`archive error: ${error}`} />;
   if (!index || resolved === null) return <ArchiveLoading />;
@@ -143,10 +152,7 @@ function ResultInner() {
   const formation = formationById(decoded.payload.formationId)!;
   const finished = revealedCount >= steps.length;
   const visibleSteps = steps.slice(0, revealedCount);
-  const r = campaign.leagueRecord;
   const champion = ["champion", "unbeaten-champion", "perfect-champion"].includes(campaign.outcome);
-  // Share LINKS always embed the portable full seed so they work on any
-  // device; the bare 6-char code is the quick same-device / H2H handle.
   const shareUrl =
     typeof window !== "undefined" ? `${window.location.origin}/result?seed=${encodeURIComponent(seed)}` : "";
 
@@ -162,14 +168,32 @@ function ResultInner() {
           </h1>
         </div>
         {!finished && (
-          <div className="flex flex-wrap gap-2">
-            <button type="button" className="btn-brass" onClick={() => setRevealedCount((n) => Math.min(steps.length, n + 1))}>
-              {revealedCount === 0 ? "Kick off →" : "Next →"}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="font-mono flex gap-1 text-[0.62rem] uppercase tracking-wider" role="radiogroup" aria-label="Match speed">
+              {(["slow", "normal", "fast", "instant"] as LiveSpeed[]).map((s) => (
+                <button
+                  key={s}
+                  type="button"
+                  role="radio"
+                  aria-checked={speed === s}
+                  onClick={() => setSpeed(s)}
+                  className={`rounded border px-2 py-1.5 ${speed === s ? "border-(--color-brass) text-(--color-brass)" : "border-(--color-line) text-(--color-chalk-faint) hover:text-(--color-chalk)"}`}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+            <button type="button" className="btn-brass" disabled={!liveDone} onClick={revealNext}>
+              {revealedCount === 0 ? "Kick off →" : liveDone ? "Next →" : "Playing…"}
             </button>
-            <button type="button" className="btn-ghost" onClick={() => setAutoplay(!autoplay)} aria-pressed={autoplay}>
-              {autoplay ? "Pause" : "Autoplay"}
-            </button>
-            <button type="button" className="btn-ghost" onClick={() => setRevealedCount(steps.length)}>
+            <button
+              type="button"
+              className="btn-ghost"
+              onClick={() => {
+                setRevealedCount(steps.length);
+                setLiveDone(true);
+              }}
+            >
               Skip to verdict
             </button>
           </div>
@@ -177,7 +201,6 @@ function ResultInner() {
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
-        {/* the XI (sticky context) */}
         <section className="space-y-3">
           <p className="kicker">the eleven</p>
           <Pitch
@@ -198,21 +221,26 @@ function ResultInner() {
           </div>
         </section>
 
-        {/* the story, one step at a time */}
         <section className="space-y-3">
           <p className="kicker">
             the campaign · step {Math.min(revealedCount, steps.length)} of {steps.length}
           </p>
 
           {visibleSteps.map((step, i) => {
-            const latest = i === visibleSteps.length - 1;
+            const latest = i === visibleSteps.length - 1 && !finished;
             if (step.kind === "league") {
               const m = campaign.leagueMatches[step.leagueIndex!];
-              return <MatchCard key={`L${step.leagueIndex}`} m={m} highlight={latest} defaultOpen={latest} />;
+              return (
+                <LiveMatchCard
+                  key={`L${step.leagueIndex}`}
+                  m={m}
+                  isLive={latest}
+                  speed={speed}
+                  onDone={() => setLiveDone(true)}
+                />
+              );
             }
-            if (step.kind === "table") {
-              return <TableCard key="table" campaign={campaign} highlight={latest} />;
-            }
+            if (step.kind === "table") return <TableCard key="table" campaign={campaign} highlight={latest} />;
             if (step.kind === "leg") {
               const tie = step.tie!;
               const m = tie.legs[step.legIndex!];
@@ -225,8 +253,8 @@ function ResultInner() {
                       · vs {tie.opponentName}
                     </p>
                   )}
-                  <MatchCard m={m} highlight={latest} defaultOpen={latest} />
-                  {isLastLeg && tie.legs.length === 2 && (
+                  <LiveMatchCard m={m} isLive={latest} speed={speed} onDone={() => setLiveDone(true)} />
+                  {isLastLeg && tie.legs.length === 2 && (!latest || liveDone) && (
                     <p className="font-mono mt-1 text-right text-[0.68rem] uppercase tracking-wider text-(--color-chalk-dim)">
                       aggregate {tie.aggregate[0]}–{tie.aggregate[1]}
                       {tie.pens ? ` · pens ${tie.pens[0]}–${tie.pens[1]}` : ""} ·{" "}
@@ -235,15 +263,9 @@ function ResultInner() {
                       </span>
                     </p>
                   )}
-                  {isLastLeg && tie.round === "final" && tie.pens && (
-                    <p className="font-mono mt-1 text-right text-[0.68rem] uppercase tracking-wider text-(--color-chalk-dim)">
-                      penalties {tie.pens[0]}–{tie.pens[1]}
-                    </p>
-                  )}
                 </div>
               );
             }
-            // verdict
             return (
               <VerdictCard
                 key="verdict"
@@ -258,10 +280,10 @@ function ResultInner() {
             );
           })}
 
-          {!finished && revealedCount > 0 && (
+          {!finished && revealedCount > 0 && liveDone && (
             <button
               type="button"
-              onClick={() => setRevealedCount((n) => Math.min(steps.length, n + 1))}
+              onClick={revealNext}
               className="card w-full p-4 text-center font-mono text-[0.7rem] uppercase tracking-[0.2em] text-(--color-brass) transition hover:border-(--color-brass)"
             >
               {steps[revealedCount].kind === "verdict"
@@ -273,7 +295,7 @@ function ResultInner() {
           )}
           {!finished && (
             <p className="font-mono text-center text-[0.6rem] uppercase tracking-[0.2em] text-(--color-chalk-faint)">
-              record so far stays sealed — that&apos;s the point
+              matches play out minute by minute — the ending stays sealed
             </p>
           )}
         </section>
@@ -282,81 +304,124 @@ function ResultInner() {
   );
 }
 
-/* ---------------- cards ---------------- */
+/* ---------------- live match card ---------------- */
 
-function MatchCard({ m, highlight, defaultOpen }: { m: PlayedMatch; highlight?: boolean; defaultOpen?: boolean }) {
-  const [open, setOpen] = useState(!!defaultOpen);
-  const won = m.userGoals > m.oppGoals;
-  const drew = m.userGoals === m.oppGoals;
+function LiveMatchCard({
+  m,
+  isLive,
+  speed,
+  onDone,
+}: {
+  m: PlayedMatch;
+  isLive: boolean;
+  speed: LiveSpeed;
+  onDone: () => void;
+}) {
+  const result = m.result;
+  const [state, setState] = useState<LiveState>(() =>
+    isLive ? { minute: 0, kicksRevealed: 0 } : skipToEnd(result),
+  );
+  const doneNotified = useRef(!isLive);
+
+  const done = matchDone(state, result);
+  useEffect(() => {
+    if (done && !doneNotified.current) {
+      doneNotified.current = true;
+      onDone();
+    }
+  }, [done, onDone]);
+
+  useEffect(() => {
+    if (!isLive || done) return;
+    if (speed === "instant") {
+      setState(skipToEnd(result));
+      return;
+    }
+    const inPens = clockDone(state, result);
+    const interval = setInterval(
+      () => setState((s) => advance(s, result)),
+      inPens ? PEN_KICK_MS[speed] : SPEED_MS[speed],
+    );
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLive, done, speed, clockDone(state, result)]);
+
+  // user-perspective orientation: result side 0 is the home side
+  const userIdx = m.home ? 0 : 1;
+  const score = liveScore(state, result);
+  const penScore = livePenScore(state, result);
+  const events = visibleEvents(state, result);
+  const kicks = visibleKicks(state, result);
+  const userG = score[userIdx];
+  const oppG = score[1 - userIdx];
+  const won = userG > oppG;
+  const drew = userG === oppG;
   const venue = m.label.includes("(H)") ? "home" : m.label.includes("(A)") ? "away" : "neutral venue";
-  const goals = m.result.events.filter((e) => e.type === "goal" || e.type === "penalty-goal");
+
   return (
-    <div className={`card overflow-hidden ${highlight ? "spin-reel border-(--color-brass-soft)" : ""}`}>
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
-        aria-expanded={open}
-      >
+    <div className={`card overflow-hidden ${isLive ? "border-(--color-brass-soft)" : ""}`}>
+      <div className="flex w-full items-center justify-between gap-3 px-4 py-3">
         <span className="font-mono w-28 shrink-0 text-[0.62rem] uppercase tracking-wider text-(--color-chalk-faint)">
           {m.label}
         </span>
         <span className="flex-1 truncate text-sm text-(--color-chalk-dim)">
           {m.opponentName} <span className="text-(--color-chalk-faint)">· {venue}</span>
         </span>
-        <span
-          className={`font-mono score-tick text-base font-semibold ${won ? "text-(--color-grass-bright)" : drew ? "text-(--color-chalk-dim)" : "text-(--color-blood)"}`}
-        >
-          {m.userGoals}–{m.oppGoals}
-          {m.result.pens ? " (p)" : m.result.etGoals ? " (aet)" : ""}
+        <span className="font-mono shrink-0 text-[0.65rem] uppercase tracking-wider text-(--color-brass)">
+          {isLive && !done ? (clockDone(state, result) ? "pens" : `${state.minute}'`) : phaseLabel(state, result)}
         </span>
-      </button>
-      {open && (
-        <ul className="ticket-edge space-y-1 px-4 py-2.5">
-          <li className="font-mono text-[0.6rem] uppercase tracking-wider text-(--color-chalk-faint)">
-            xG {m.home ? m.result.xg[0] : m.result.xg[1]} – {m.home ? m.result.xg[1] : m.result.xg[0]} · {goals.length} goals
-          </li>
-          {timelineWithMarkers(m).map((e, i) =>
-            e === "HT" || e === "FT" || e === "ET" ? (
-              <li key={`m${i}`} className="font-mono text-[0.58rem] uppercase tracking-[0.25em] text-(--color-chalk-faint)">
-                — {e === "HT" ? "half-time" : e === "FT" ? "full-time" : "extra time"} —
-              </li>
-            ) : (
-              <li key={i} className="text-xs text-(--color-chalk-dim)">
-                <span className="font-mono mr-2 text-(--color-brass)">{e.minute}&apos;</span>
-                {e.text}
-              </li>
-            ),
+        <span
+          className={`font-mono score-tick text-base font-semibold ${
+            done ? (won ? "text-(--color-grass-bright)" : drew ? "text-(--color-chalk-dim)" : "text-(--color-blood)") : "text-(--color-chalk)"
+          }`}
+        >
+          {userG}–{oppG}
+          {done && result.pens ? " (p)" : done && result.etGoals ? " (aet)" : ""}
+        </span>
+      </div>
+      {(isLive || events.length > 0) && (
+        <ul className="ticket-edge max-h-56 space-y-1 overflow-y-auto px-4 py-2.5 archive-scroll">
+          {events.length === 0 && (
+            <li className="text-xs text-(--color-chalk-faint)">{isLive ? "The whistle goes…" : "A quiet, tactical affair."}</li>
           )}
-          {m.result.events.length === 0 && <li className="text-xs text-(--color-chalk-faint)">A quiet, tactical affair.</li>}
+          {events.map((e, i) => (
+            <li key={i} className="text-xs text-(--color-chalk-dim)">
+              <span className="font-mono mr-2 text-(--color-brass)">{e.minute}&apos;</span>
+              {e.text}
+            </li>
+          ))}
+          {kicks.length > 0 && (
+            <li className="font-mono pt-1 text-[0.62rem] uppercase tracking-wider text-(--color-chalk)">
+              shootout {penScore[userIdx]}–{penScore[1 - userIdx]}:
+              {kicks.map((k, i) => (
+                <span key={i} className={k.scored ? "text-(--color-grass-bright)" : "text-(--color-blood)"}>
+                  {" "}
+                  {k.taker.split(" ").slice(-1)[0]} {k.scored ? "✓" : "✗"}
+                </span>
+              ))}
+            </li>
+          )}
+          {done && (
+            <li className="font-mono pt-1 text-[0.6rem] uppercase tracking-[0.2em] text-(--color-chalk-faint)">
+              — full time · xG {m.home ? result.xg[0] : result.xg[1]} – {m.home ? result.xg[1] : result.xg[0]} —
+            </li>
+          )}
         </ul>
+      )}
+      {isLive && !done && (
+        <button
+          type="button"
+          className="ticket-edge font-mono w-full px-4 py-1.5 text-[0.6rem] uppercase tracking-[0.2em] text-(--color-chalk-faint) hover:text-(--color-brass)"
+          onClick={() => setState(skipToEnd(result))}
+        >
+          skip to full time
+        </button>
       )}
     </div>
   );
 }
 
-type TimelineItem = PlayedMatch["result"]["events"][number] | "HT" | "FT" | "ET";
-function timelineWithMarkers(m: PlayedMatch): TimelineItem[] {
-  const out: TimelineItem[] = [];
-  let htDone = false;
-  let ftDone = false;
-  for (const e of m.result.events) {
-    if (!htDone && e.minute > 45) {
-      out.push("HT");
-      htDone = true;
-    }
-    if (!ftDone && e.minute > 90) {
-      if (!htDone) {
-        out.push("HT");
-        htDone = true;
-      }
-      out.push("FT", "ET");
-      ftDone = true;
-    }
-    out.push(e);
-  }
-  return out;
-}
+/* ---------------- table + verdict ---------------- */
 
 function TableCard({ campaign, highlight }: { campaign: CampaignResult; highlight?: boolean }) {
   const [open, setOpen] = useState(false);
@@ -481,9 +546,7 @@ function VerdictCard({
           </div>
         )}
         <details className="font-mono text-[0.6rem] leading-relaxed text-(--color-chalk-faint)">
-          <summary className="cursor-pointer uppercase tracking-[0.2em]">
-            portable seed (works on any device)
-          </summary>
+          <summary className="cursor-pointer uppercase tracking-[0.2em]">portable seed (works on any device)</summary>
           <p className="mt-1 break-all">{seed}</p>
           <CopyButton text={seed} label="Copy full seed" />
         </details>

@@ -26,7 +26,7 @@ const gameDataSchema = z.object({
   playerSeasons: z.array(
     z.object({
       id: z.string(), playerId: z.string(), name: z.string(), clubSeasonId: z.string(),
-      pos: z.string(), posGroup: z.enum(["GK", "DF", "MF", "FW"]),
+      pos: z.string(), positions: z.array(z.string()).min(1), posGroup: z.enum(["GK", "DF", "MF", "FW"]),
       shirt: z.number().nullable(), nationality: z.string().nullable(),
       captain: z.boolean(), role: z.enum(["starter", "sub", "bench", "squad"]),
       finalGoals: z.number(), seasonApps: z.number().nullable(), seasonGoals: z.number().nullable(),

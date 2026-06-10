@@ -120,7 +120,8 @@ export const playerSeasons = sqliteTable("player_seasons", {
   id: text("id").primaryKey(), // "ps-<player>-<endYear>"
   playerId: text("player_id").notNull(),
   clubSeasonId: text("club_season_id").notNull(),
-  pos: text("pos").notNull(),
+  pos: text("pos").notNull(), // primary code
+  positions: text("positions").notNull().default("[]"), // JSON array, primary first
   posGroup: text("pos_group").notNull(), // GK | DF | MF | FW
   posInferred: integer("pos_inferred", { mode: "boolean" }).notNull().default(false),
   shirt: integer("shirt"),

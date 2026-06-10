@@ -27,7 +27,10 @@ export interface GamePlayerSeason {
   playerId: string;
   name: string;
   clubSeasonId: string;
-  pos: string; // historical position code as sourced: GK, RB, CB, IR, OL, CM...
+  pos: string; // primary historical position code as sourced: GK, RB, CB, IR, OL, CM...
+  /** ALL explicitly sourced position codes (primary first). Eligibility uses
+   *  the union of these; secondary roles are never invented from the group. */
+  positions: string[];
   posGroup: PosGroup;
   shirt: number | null;
   nationality: string | null; // flag code from source, e.g. "ESP"

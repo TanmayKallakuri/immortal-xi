@@ -110,6 +110,14 @@ async function main() {
       name: player.name,
       clubSeasonId: ps.clubSeasonId,
       pos: ps.pos,
+      positions: (() => {
+        try {
+          const arr = JSON.parse(ps.positions || "[]") as string[];
+          return arr.length ? arr : [ps.pos];
+        } catch {
+          return [ps.pos];
+        }
+      })(),
       posGroup: ps.posGroup as GamePlayerSeason["posGroup"],
       shirt: ps.shirt,
       nationality: ps.nationality,

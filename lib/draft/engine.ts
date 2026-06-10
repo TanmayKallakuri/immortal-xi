@@ -17,7 +17,7 @@
 import { createRng } from "../rng";
 import type { GameDataIndex } from "../data/game-data";
 import type { GameClubSeason, GamePlayerSeason } from "../types";
-import { formationById, slotFit, ineligibleReason, type Formation, type FormationSlot } from "./formations";
+import { formationById, slotFitForPositions, ineligibleReason, type Formation, type FormationSlot } from "./formations";
 
 export type DraftMode = "classic" | "hard";
 
@@ -86,11 +86,11 @@ export function selectablePlayers(
     .filter(Boolean)
     .map((player) => {
       const eligibleSlots = open
-        .map((slot) => ({ slot, fit: slotFit(player.pos, player.posGroup, slot) }))
+        .map((slot) => ({ slot, fit: slotFitForPositions(player.positions, player.posGroup, slot) }))
         .filter((e) => e.fit > 0);
       const blockedReason = usedPlayerIds.has(player.playerId)
         ? "Already in your XI"
-        : ineligibleReason(player.pos, player.posGroup, open);
+        : ineligibleReason(player.positions, player.posGroup, open);
       return { player, eligibleSlots, blockedReason };
     });
 }
@@ -210,7 +210,7 @@ export function applyPick(
   if (state.picks.some((p) => p.playerId === player.playerId)) {
     throw new Error(`${player.name} is already in your XI`);
   }
-  if (slotFit(player.pos, player.posGroup, slot) <= 0) {
+  if (slotFitForPositions(player.positions, player.posGroup, slot) <= 0) {
     throw new Error(`${player.name} (${player.pos}) cannot play ${slot.label}`);
   }
   return {

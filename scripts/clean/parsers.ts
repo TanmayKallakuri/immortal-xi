@@ -128,7 +128,9 @@ export function parseFinalsList(wikitext: string): { rows: FinalsListRow[]; anom
 export interface SquadListPlayer {
   shirt: number | null;
   nationality: string | null;
-  pos: string; // GK | DF | MF | FW as given by the template
+  pos: string; // primary code as given by the template
+  /** all explicitly sourced codes (e.g. "DF/MF" -> ["DF","MF"]) */
+  positions: string[];
   linkTarget: string | null;
   displayName: string;
   /** continental (European) appearances that season, where the article's
@@ -230,10 +232,14 @@ export function parseSquadPage(wikitext: string): ParsedSquadPage {
     const link = nameRaw.match(/\[\[([^|\]]+)(?:\|([^\]]*))?\]\]/);
     const displayName = (link ? (link[2] ?? link[1]) : nameRaw.replace(/\{\{[^}]*\}\}/g, "")).trim();
     if (!displayName) continue;
-    const posRaw = (named["pos"] ?? "").toUpperCase().replace(/[^A-Z]/g, "");
-    // group codes (GK/DF/MF/FW) or specific codes (RB, CB, DM, ST, ...)
-    if (!["GK", "DF", "MF", "FW"].includes(posRaw) && !posToGroup(posRaw).confident) {
-      anomalies.push(`unrecognized squad position "${posRaw}" for ${displayName}`);
+    // explicit multi-position support: "DF/MF" -> ["DF","MF"]; never invented
+    const posCodes = (named["pos"] ?? "")
+      .split(/[/,;]/)
+      .map((p) => p.toUpperCase().replace(/[^A-Z]/g, ""))
+      .filter((p) => ["GK", "DF", "MF", "FW"].includes(p) || posToGroup(p).confident);
+    const posRaw = posCodes[0];
+    if (!posRaw) {
+      anomalies.push(`unrecognized squad position "${named["pos"] ?? ""}" for ${displayName}`);
       continue;
     }
     const key = link ? link[1].trim() : displayName;
@@ -258,6 +264,7 @@ export function parseSquadPage(wikitext: string): ParsedSquadPage {
       shirt: noRaw && /^\d{1,2}$/.test(noRaw) ? parseInt(noRaw, 10) : null,
       nationality: natRaw ? natRaw.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 3) || null : null,
       pos: posRaw,
+      positions: posCodes,
       linkTarget: link ? link[1].trim() : null,
       displayName,
       continentalApps,
