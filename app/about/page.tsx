@@ -45,13 +45,14 @@ const sections: Array<{ title: string; body: React.ReactNode }> = [
     ),
   },
   {
-    title: "Share codes",
+    title: "Share codes and links",
     body: (
       <>
-        Every finished XI gets a 6-character share code (alphabet without 0/O/1/I/l) plus a full portable seed. Codes
-        are stored locally in your browser and resolve instantly on the same device; the full seed works anywhere and
-        is embedded in copied battle results. A hosted registry that makes short codes portable across devices is the
-        natural next step and the storage interface is already in place.
+        Every finished XI gets a 6-character share code (alphabet without 0/O/1/I/l) plus a full portable seed.{" "}
+        <strong>Share links always embed the full seed</strong>, so a copied result URL works on any device. The short
+        code is the convenient handle on the device that created it (and for quick Head-to-Head entry); it is stored in
+        your browser, not on a server. A hosted registry that makes bare 6-character codes portable across devices is
+        the natural next step — the storage interface is already in place, it just needs a backend.
       </>
     ),
   },

@@ -10,8 +10,6 @@ data/immortal.db-shm
 data/probe/
 data/raw/
 data/reports/
-public/game-data.json
-public/quality-report.json
 .env*
 
 .session-state/

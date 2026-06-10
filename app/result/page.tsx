@@ -145,12 +145,10 @@ function ResultInner() {
   const visibleSteps = steps.slice(0, revealedCount);
   const r = campaign.leagueRecord;
   const champion = ["champion", "unbeaten-champion", "perfect-champion"].includes(campaign.outcome);
+  // Share LINKS always embed the portable full seed so they work on any
+  // device; the bare 6-char code is the quick same-device / H2H handle.
   const shareUrl =
-    typeof window !== "undefined"
-      ? code
-        ? `${window.location.origin}/result?c=${code}`
-        : `${window.location.origin}/result?seed=${encodeURIComponent(seed)}`
-      : "";
+    typeof window !== "undefined" ? `${window.location.origin}/result?seed=${encodeURIComponent(seed)}` : "";
 
   return (
     <div className="space-y-6 pt-2">

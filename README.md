@@ -17,11 +17,10 @@ Every finished team gets a **6-character share code** (plus a portable full seed
 
 ```bash
 npm install
-npm run pipeline   # ingest -> clean -> export -> quality report (fetches real sources)
-npm run dev        # open http://localhost:3000
+npm run dev        # open http://localhost:3000 — playable immediately
 ```
 
-The repo ships without data by design — `npm run pipeline` builds the dataset from live public sources and prints a full data-quality report when it's done. Already-fetched raw payloads are reused on re-runs.
+The repo ships with the generated game export (`public/game-data.json` + `public/quality-report.json`) so a fresh clone installs, tests, builds and plays with no network beyond npm. The export is derived data (CC BY-SA / CC0 factual records + this game's own ratings) and is fully regenerable: `npm run pipeline` re-ingests from live public sources, rebuilds the canonical layer, recomputes ratings, and re-runs the quality report + rating audit. Raw source payloads are never committed.
 
 ## Commands
 

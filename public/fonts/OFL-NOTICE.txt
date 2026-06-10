@@ -1,0 +1,14 @@
+The font files in this directory are self-hosted subsets of:
+
+  Fraunces — Copyright 2020 The Fraunces Project Authors
+  https://github.com/undercasetype/Fraunces
+
+  IBM Plex Mono — Copyright IBM Corp.
+  https://github.com/IBM/plex
+
+Both are licensed under the SIL Open Font License, Version 1.1:
+https://openfontlicense.org/open-font-license-official-text/
+
+The OFL permits bundling, redistribution and self-hosting. The fonts are
+not sold separately and retain their original names and copyrights.
+Regenerate these subsets with: node scripts/dev/fetch-fonts.mjs

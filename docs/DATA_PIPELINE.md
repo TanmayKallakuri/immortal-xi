@@ -89,7 +89,10 @@ Every club-season carries a `category` (and optional `tags`):
 
 ```bash
 npm run pipeline
-# = ingest (reuses existing raw payloads) -> clean -> export-game-data -> data-quality-report
+# = ingest (reuses existing raw payloads) -> clean -> export-game-data
+#   -> data-quality-report -> rating-audit
 ```
 
 Force a fresh ingest by deleting `data/raw/<source>/` for the sources you want refetched.
+
+**What is committed vs. generated:** the GAME-layer export (`public/game-data.json`, `public/quality-report.json`) is committed so fresh clones run with zero network setup — it is derived, redistributable data (CC BY-SA/CC0 factual records + this game's own ratings) and `npm run pipeline` regenerates it byte-for-byte from sources. The RAW layer (`data/raw/`) and the canonical SQLite database are never committed.

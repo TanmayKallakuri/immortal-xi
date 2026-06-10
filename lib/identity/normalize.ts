@@ -106,6 +106,17 @@ const CLUB_ALIAS_MAP: Record<string, CanonicalClub> = (() => {
     ["shakhtar-donetsk", "Shakhtar Donetsk", "Ukraine", ["shakhtar donetsk", "fc shakhtar donetsk", "shakhtar"]],
     ["galatasaray", "Galatasaray", "Turkey", ["galatasaray", "galatasaray sk", "galatasaray s k"]],
     ["napoli", "Napoli", "Italy", ["napoli", "ssc napoli", "s s c napoli"]],
+    ["schalke-04", "Schalke 04", "Germany", ["schalke 04", "fc schalke 04", "schalke"]],
+    ["basel", "Basel", "Switzerland", ["basel", "fc basel", "fc basel 1893"]],
+    ["fenerbahce", "Fenerbahçe", "Turkey", ["fenerbahce", "fenerbahce sk", "fenerbahce s k"]],
+    ["rb-leipzig", "RB Leipzig", "Germany", ["rb leipzig", "rasenballsport leipzig"]],
+    ["sturm-graz", "Sturm Graz", "Austria", ["sturm graz", "sk sturm graz"]],
+    ["dundee-united", "Dundee United", "Scotland", ["dundee united", "dundee united fc", "dundee united f c"]],
+    ["ifk-goteborg", "IFK Göteborg", "Sweden", ["ifk goteborg", "ifk gothenburg"]],
+    ["widzew-lodz", "Widzew Łódź", "Poland", ["widzew lodz", "rts widzew lodz"]],
+    ["rosenborg", "Rosenborg", "Norway", ["rosenborg", "rosenborg bk"]],
+    ["spartak-moscow", "Spartak Moscow", "Russia", ["spartak moscow", "fc spartak moscow", "spartak moskva"]],
+    ["nantes", "Nantes", "France", ["nantes", "fc nantes", "fc nantes atlantique"]],
   ];
   const map: Record<string, CanonicalClub> = {};
   for (const [id, name, country, aliases] of defs) {

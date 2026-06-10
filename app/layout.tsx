@@ -1,19 +1,9 @@
 import type { Metadata } from "next";
-import { Fraunces, IBM_Plex_Mono } from "next/font/google";
 import Link from "next/link";
+// Fonts are self-hosted (public/fonts, SIL OFL) so builds never touch the
+// network — see scripts/dev/fetch-fonts.mjs.
+import "./fonts/fonts.css";
 import "./globals.css";
-
-const fraunces = Fraunces({
-  subsets: ["latin"],
-  variable: "--font-fraunces",
-  axes: ["opsz", "SOFT", "WONK"],
-});
-
-const plexMono = IBM_Plex_Mono({
-  subsets: ["latin"],
-  weight: ["400", "500", "600"],
-  variable: "--font-plex-mono",
-});
 
 export const metadata: Metadata = {
   title: "Immortal XI — the all-era European draft",
@@ -38,7 +28,7 @@ function Crown() {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
-      <body className={`${fraunces.variable} ${plexMono.variable} antialiased`}>
+      <body className="antialiased">
         <svg className="pitch-lines" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice" aria-hidden>
           <circle cx="50" cy="50" r="18" fill="none" stroke="#ece3cd" strokeWidth="0.2" />
           <line x1="0" y1="50" x2="100" y2="50" stroke="#ece3cd" strokeWidth="0.2" />

@@ -1,5 +1,11 @@
 @import "tailwindcss";
 
+:root {
+  /* self-hosted families declared in app/fonts/fonts.css */
+  --font-fraunces: "Fraunces";
+  --font-plex-mono: "IBM Plex Mono";
+}
+
 @theme {
   --color-ink: #0a0f0b;
   --color-ink-2: #101812;

@@ -70,9 +70,15 @@ let cached: GameDataIndex | null = null;
 export async function loadGameData(): Promise<GameDataIndex> {
   if (cached) return cached;
   if (typeof window === "undefined") {
-    const { readFileSync } = await import("node:fs");
+    const { readFileSync, existsSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const raw = JSON.parse(readFileSync(join(process.cwd(), "public", "game-data.json"), "utf8"));
+    const p = join(process.cwd(), "public", "game-data.json");
+    if (!existsSync(p)) {
+      throw new Error(
+        "public/game-data.json not found. The repo ships with a generated export; if it is missing, rebuild it with `npm run pipeline` (ingest -> clean -> export -> reports).",
+      );
+    }
+    const raw = JSON.parse(readFileSync(p, "utf8"));
     cached = indexGameData(raw);
   } else {
     const res = await fetch("/game-data.json");
