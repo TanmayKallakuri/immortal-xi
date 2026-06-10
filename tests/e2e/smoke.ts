@@ -31,8 +31,8 @@ async function engineFlow(): Promise<{ seedA: string; seedB: string }> {
   console.log("\n[1/3] engine end-to-end");
   const index = await loadGameData();
 
-  const fullDraft = (key: string, formationId: string): SeedPayload => {
-    let state = newDraft(key, formationId);
+  const fullDraft = (key: string, formationId: string, mode: "classic" | "hard" = "classic"): SeedPayload => {
+    let state = newDraft(key, formationId, mode);
     while (state.round < 11) {
       const s = spin(state, index);
       const pick = s.selectable
@@ -46,6 +46,7 @@ async function engineFlow(): Promise<{ seedA: string; seedB: string }> {
     return {
       dataVersion: index.data.dataVersion,
       simVersion: SIM_VERSION,
+      mode,
       formationId,
       draftSeed: key,
       playerSeasonIds: formation.slots.map((s) => bySlot.get(s.id)!),
@@ -64,11 +65,18 @@ async function engineFlow(): Promise<{ seedA: string; seedB: string }> {
   check("campaign reaches a final outcome", c1.outcomeLabel.length > 0, c1.outcomeLabel);
   check("league phase has 8 matches + 36-team table", c1.leagueMatches.length === 8 && c1.table.length === 36);
 
-  const payloadB = fullDraft("e2e-beta", "352");
+  const payloadB = fullDraft("e2e-beta", "352", "hard");
   const seedB = encodeSeed(payloadB, index);
   const decB = decodeSeed(seedB, index, SIM_VERSION);
-  check("second seed valid", decB.ok);
+  check("second seed valid (hard mode)", decB.ok && decB.ok === true && decB.payload.mode === "hard");
   if (!decB.ok) throw new Error("seed B decode failed");
+
+  // compact code layer over the seeds
+  const { saveSeed, resolveCode, memoryRegistry } = await import("../../lib/draft/code");
+  const reg = memoryRegistry();
+  const codeA = saveSeed(seedA, reg);
+  check("compact code generated (6-7 chars, safe alphabet)", /^[23456789ABCDEFGHJKLMNPQRSTUVWXYZ]{6,8}$/.test(codeA), codeA);
+  check("compact code resolves to the exact seed", resolveCode(codeA, reg) === seedA);
 
   console.log("\n[2/3] head-to-head end-to-end");
   for (const mode of ["final", "two-legged", "best-of-7"] as const) {

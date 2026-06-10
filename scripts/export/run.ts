@@ -34,12 +34,14 @@ async function main() {
   const sources = db.select().from(t.sources).all();
   const sourceRecords = db.select().from(t.sourceRecords).all();
 
-  // ---- career finals per player ----
-  const finalist = new Map(clubSeasons.filter((c) => c.progression === "W" || c.progression === "RU").map((c) => [c.id, c]));
+  // ---- career finals per player (lineup evidence only — squad-list
+  //      membership is not "played a final") ----
+  const csById = new Map(clubSeasons.map((c) => [c.id, c]));
   const careerFinals = new Map<string, { n: number; wins: number }>();
   for (const ps of playerSeasons) {
-    const cs = finalist.get(ps.clubSeasonId);
-    if (!cs) continue;
+    if (ps.role === "squad") continue;
+    const cs = csById.get(ps.clubSeasonId);
+    if (!cs || (cs.progression !== "W" && cs.progression !== "RU")) continue;
     const cur = careerFinals.get(ps.playerId) ?? { n: 0, wins: 0 };
     cur.n++;
     if (cs.progression === "W") cur.wins++;
@@ -66,21 +68,25 @@ async function main() {
   );
 
   for (const ps of playerSeasons) {
-    const cs = finalist.get(ps.clubSeasonId);
+    const cs = csById.get(ps.clubSeasonId);
     if (!cs || !cs.squadComplete) continue; // only draftable squads carry players into the game
     const season = seasonById.get(cs.seasonId)!;
-    const career = careerFinals.get(ps.playerId) ?? { n: 1, wins: 0 };
+    const career = careerFinals.get(ps.playerId) ?? { n: ps.role === "squad" ? 0 : 1, wins: 0 };
+    const tags = JSON.parse(cs.tags || "[]") as string[];
 
     const { ratings: computed, explanation } = computeRatings({
       posGroup: ps.posGroup as "GK" | "DF" | "MF" | "FW",
-      role: ps.role as "starter" | "sub" | "bench",
-      progression: cs.progression as "W" | "RU",
+      role: ps.role as "starter" | "sub" | "bench" | "squad",
+      teamTier: cs.progression as "W" | "RU" | "SF" | "QF" | "R16" | "GS" | "PART",
       finalGoals: ps.finalGoals,
+      continentalApps: ps.continentalApps,
+      continentalGoals: ps.continentalGoals,
       captain: ps.captain,
       careerFinals: career.n,
       careerFinalWins: career.wins,
       endYear: season.endYear,
       confidenceScore: ps.confidenceScore,
+      tags,
     });
 
     const ov = overrideByPs.get(ps.id);
@@ -110,6 +116,8 @@ async function main() {
       captain: ps.captain,
       role: ps.role as GamePlayerSeason["role"],
       finalGoals: ps.finalGoals,
+      seasonApps: ps.continentalApps,
+      seasonGoals: ps.continentalGoals,
       careerFinals: career.n,
       careerFinalWins: career.wins,
       ratings,
@@ -122,37 +130,26 @@ async function main() {
     exportedPsByClubSeason.set(ps.clubSeasonId, list);
   }
 
-  // ---- club-season strength + rounds reached (for the opponent pool) ----
-  // Round reached per club-season from canonical matches (footballcsv rounds).
-  const roundsTable = db.select().from(t.rounds).all();
-  const roundById = new Map(roundsTable.map((r) => [r.id, r]));
-  const roundScore = (name: string): number => {
-    const n = name.toLowerCase();
-    if (n.includes("final") && !n.includes("semi") && !n.includes("quarter")) return 6;
-    if (n.includes("semi")) return 5;
-    if (n.includes("quarter")) return 4;
-    if (n.includes("16") || n.includes("second round") || n.includes("round 2") || n.includes("eighth")) return 3;
-    if (n.includes("group") || n.includes("league")) return 2;
-    return 1;
+  // ---- club-season strength from CATEGORY (clean derives category for every
+  //      club-season from finals evidence, curation, or round reached) ----
+  // Strength is a deterministic game-design band (docs/SIMULATION.md).
+  const STRENGTH_BY_CATEGORY: Record<string, number> = {
+    champion: 86,
+    runner_up: 82,
+    semi_finalist: 78,
+    quarter_finalist: 75,
+    round_of_16: 72,
+    group_stage: 69,
+    group_stage_iconic: 71,
+    league_phase_iconic: 71,
+    participant: 66,
   };
-  const bestRound = new Map<string, number>();
-  for (const m of matches) {
-    const r = roundById.get(m.roundId);
-    const score = r ? roundScore(r.name) : 1;
-    for (const csId of [m.homeClubSeasonId, m.awayClubSeasonId]) {
-      bestRound.set(csId, Math.max(bestRound.get(csId) ?? 0, score));
-    }
-  }
-
-  // Opponent description strings come from real names only; strength is a
-  // deterministic game-design band (documented in docs/SIMULATION.md).
   const strengthFor = (cs: (typeof clubSeasons)[number]): number => {
     const jitter = (hash32(cs.id) % 5) - 2; // -2..+2, stable per club-season
-    if (cs.progression === "W") return 86 + jitter;
-    if (cs.progression === "RU") return 82 + jitter;
-    const round = bestRound.get(cs.id) ?? 1;
-    const base = round >= 5 ? 78 : round === 4 ? 75 : round === 3 ? 72 : round === 2 ? 69 : 66;
-    return base + jitter;
+    const base = STRENGTH_BY_CATEGORY[cs.category] ?? 66;
+    const tags = JSON.parse(cs.tags || "[]") as string[];
+    const eyeTest = tags.includes("high_xg_or_eye_test_team") ? 2 : 0;
+    return Math.min(90, base + eyeTest + jitter);
   };
 
   const gameClubSeasons: GameClubSeason[] = [];
@@ -181,7 +178,9 @@ async function main() {
       year: season.endYear,
       eraLabel: eraLabel(season.endYear),
       competition: season.competitionId as "EC" | "UCL",
-      progression: cs.progression as GameClubSeason["progression"],
+      progression: cs.progression,
+      category: cs.category,
+      tags: JSON.parse(cs.tags || "[]") as string[],
       finalScore: cs.finalScore ?? "",
       opponentClubName: opponentName,
       teamStrength: strengthFor(cs),

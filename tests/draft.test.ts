@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from "vitest";
 import { loadGameData, type GameDataIndex } from "../lib/data/game-data";
-import { newDraft, spin, applyPick, spinWeight, type DraftState, MAX_SAME_CLUB } from "../lib/draft/engine";
+import { newDraft, spin, applyPick, spinWeight, type DraftState, type DraftMode, MAX_SAME_CLUB } from "../lib/draft/engine";
 import { encodeSeed, decodeSeed, type SeedPayload } from "../lib/draft/seed";
 import { formationById } from "../lib/draft/formations";
 import { SIM_VERSION } from "../lib/simulation/version";
@@ -12,8 +12,12 @@ beforeAll(async () => {
 });
 
 /** play a full deterministic draft: always pick the best-rated selectable player */
-export function autoDraft(seed: string, formationId = "433"): { state: DraftState; payload: SeedPayload } {
-  let state = newDraft(seed, formationId);
+export function autoDraft(
+  seed: string,
+  formationId = "433",
+  mode: DraftMode = "classic",
+): { state: DraftState; payload: SeedPayload } {
+  let state = newDraft(seed, formationId, mode);
   while (state.round < 11) {
     const s = spin(state, index);
     const selectable = s.selectable
@@ -30,6 +34,7 @@ export function autoDraft(seed: string, formationId = "433"): { state: DraftStat
   const payload: SeedPayload = {
     dataVersion: index.data.dataVersion,
     simVersion: SIM_VERSION,
+    mode,
     formationId,
     draftSeed: seed,
     playerSeasonIds: formation.slots.map((s) => bySlot.get(s.id)!),
@@ -96,6 +101,31 @@ describe("draft engine", () => {
     expect(after.weight).toBeGreaterThan(0);
     expect(after.parts.clubDiversity).toBeLessThan(before.parts.clubDiversity);
     expect(after.parts.clubDiversity).toBeCloseTo(0.22);
+  });
+
+  it("weights include band/category diversity and only mild champion bias", () => {
+    const state = newDraft("diversity-parts", "433");
+    const champion = index.draftable.find((c) => c.category === "champion")!;
+    const semi = index.draftable.find((c) => c.category === "semi_finalist")!;
+    const wChampion = spinWeight(champion, state, index);
+    const wSemi = spinWeight(semi, state, index);
+    expect(wChampion.parts.significance).toBeCloseTo(1.05);
+    expect(wSemi.parts.significance).toBeCloseTo(1.0);
+    expect(wChampion.parts.bandDiversity).toBeDefined();
+    expect(wChampion.parts.categoryDiversity).toBeDefined();
+  });
+
+  it("drafts pull in non-finalist iconic teams across seeds (power-curve diversity)", () => {
+    const categories = new Set<string>();
+    for (const seed of ["div1", "div2", "div3", "div4", "div5", "div6", "div7", "div8"]) {
+      const { state } = autoDraft(seed);
+      for (const csId of state.spunClubSeasonIds) {
+        categories.add(index.clubSeasonById.get(csId)!.category);
+      }
+    }
+    // across 8 drafts the archive must surface beyond champions/runners-up
+    expect([...categories].some((c) => !["champion", "runner_up"].includes(c))).toBe(true);
+    expect(categories.size).toBeGreaterThanOrEqual(3);
   });
 
   it("rejects invalid picks", () => {

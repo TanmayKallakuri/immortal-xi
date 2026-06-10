@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { GameDataProvider, useGameData, ArchiveLoading } from "@/components/GameDataProvider";
 import { Pitch } from "@/components/Pitch";
@@ -11,9 +11,12 @@ import {
   spin,
   applyPick,
   openSlots,
+  type DraftMode,
   type DraftState,
   type SelectablePlayer,
 } from "@/lib/draft/engine";
+import { buildRevealPlan, canSelectDuringReveal, type RevealPhase } from "@/lib/draft/reveal";
+import { visibilityFor } from "@/lib/draft/visibility";
 import { encodeSeed } from "@/lib/draft/seed";
 import { SIM_VERSION } from "@/lib/simulation/version";
 import { profileFromSeedPlayers } from "@/lib/simulation/strength";
@@ -51,14 +54,16 @@ function DraftFlow() {
     );
   }
   if (!index) return <ArchiveLoading />;
-  if (!draftState) return <FormationSelect onStart={(seed, formationId) => setDraftState(newDraft(seed, formationId))} />;
+  if (!draftState)
+    return <SetupScreen onStart={(seed, formationId, mode) => setDraftState(newDraft(seed, formationId, mode))} />;
   if (draftState.round >= 11) return <Review state={draftState} index={index} />;
   return <DraftRound state={draftState} index={index} onPick={setDraftState} />;
 }
 
-/* ---------------- formation selection ---------------- */
+/* ---------------- mode + formation selection ---------------- */
 
-function FormationSelect({ onStart }: { onStart: (seed: string, formationId: string) => void }) {
+function SetupScreen({ onStart }: { onStart: (seed: string, formationId: string, mode: DraftMode) => void }) {
+  const [mode, setMode] = useState<DraftMode>("classic");
   const [formationId, setFormationId] = useState("433");
   const [seed, setSeed] = useState("");
   const formation = formationById(formationId)!;
@@ -66,12 +71,43 @@ function FormationSelect({ onStart }: { onStart: (seed: string, formationId: str
   return (
     <div className="space-y-8 pt-4">
       <div className="rise">
-        <p className="kicker mb-2">step 1 of 13</p>
-        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Choose your shape</h1>
+        <p className="kicker mb-2">set up your run</p>
+        <h1 className="text-3xl font-semibold tracking-tight sm:text-4xl">Choose your rules, then your shape</h1>
         <p className="mt-2 max-w-xl text-(--color-chalk-dim)">
-          Eleven rounds follow — one real club-season per spin, one player per round. The shape decides which positions
-          you must fill.
+          Eleven spins of the archive follow — one real club-season per spin, one player per round. In every mode, how
+          a team finished that season stays hidden until your XI is signed.
         </p>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2" role="radiogroup" aria-label="Game mode">
+        {(
+          [
+            {
+              id: "classic" as const,
+              name: "Classic Mode",
+              desc: "Full player cards: positions, ratings, season stats, data confidence. Team finishes stay hidden until the draft ends.",
+            },
+            {
+              id: "hard" as const,
+              name: "Hard Mode",
+              desc: "Football knowledge only: name, position, club, season, nationality. No ratings, no stats, no hints — they reveal after your XI is complete.",
+            },
+          ]
+        ).map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            role="radio"
+            aria-checked={mode === m.id}
+            onClick={() => setMode(m.id)}
+            className={`card card-foil p-5 text-left transition hover:border-(--color-brass-soft) ${
+              mode === m.id ? "border-(--color-brass) shadow-[0_0_24px_-8px_rgba(201,162,39,0.5)]" : ""
+            }`}
+          >
+            <div className={`text-xl font-semibold ${mode === m.id ? "text-(--color-brass)" : ""}`}>{m.name}</div>
+            <p className="mt-1.5 text-sm leading-relaxed text-(--color-chalk-dim)">{m.desc}</p>
+          </button>
+        ))}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
@@ -108,7 +144,11 @@ function FormationSelect({ onStart }: { onStart: (seed: string, formationId: str
               maxLength={32}
             />
           </label>
-          <button type="button" className="btn-brass w-full" onClick={() => onStart(seed.trim() || randomToken(), formationId)}>
+          <button
+            type="button"
+            className="btn-brass w-full"
+            onClick={() => onStart(seed.trim() || randomToken(), formationId, mode)}
+          >
             Open the archive →
           </button>
         </div>
@@ -118,6 +158,18 @@ function FormationSelect({ onStart }: { onStart: (seed: string, formationId: str
 }
 
 /* ---------------- one draft round ---------------- */
+
+function useReducedMotion(): boolean {
+  const [reduced, setReduced] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    setReduced(mq.matches);
+    const onChange = (e: MediaQueryListEvent) => setReduced(e.matches);
+    mq.addEventListener("change", onChange);
+    return () => mq.removeEventListener("change", onChange);
+  }, []);
+  return reduced;
+}
 
 function DraftRound({
   state,
@@ -130,11 +182,56 @@ function DraftRound({
 }) {
   const spun = useMemo(() => spin(state, index), [state, index]);
   const formation = formationById(state.formationId)!;
+  const vis = visibilityFor(state.mode, "draft");
   const [selected, setSelected] = useState<SelectablePlayer | null>(null);
   const [query, setQuery] = useState("");
   const [groupFilter, setGroupFilter] = useState<string | null>(null);
 
+  // ---- archive-flip reveal (deterministic; cosmetic decoys only) ----
+  const reducedMotion = useReducedMotion();
   const cs = spun.clubSeason;
+  const csLabel = `${cs.clubName} · ${cs.season}`;
+  const decoyPool = useMemo(
+    () => index.draftable.map((d) => `${d.clubName} · ${d.season}`),
+    [index],
+  );
+  const plan = useMemo(
+    () => buildRevealPlan(`${state.draftSeed}|${state.formationId}|r${state.round}`, decoyPool, csLabel, reducedMotion),
+    [state.draftSeed, state.formationId, state.round, decoyPool, csLabel, reducedMotion],
+  );
+  const [phase, setPhase] = useState<RevealPhase>(plan.durationMs === 0 ? "revealed" : "revealing");
+  const [frame, setFrame] = useState(0);
+  const timers = useRef<{ iv?: ReturnType<typeof setInterval>; to?: ReturnType<typeof setTimeout> }>({});
+
+  useEffect(() => {
+    setSelected(null);
+    setQuery("");
+    setGroupFilter(null);
+    if (plan.durationMs === 0) {
+      setPhase("revealed");
+      return;
+    }
+    setPhase("revealing");
+    setFrame(0);
+    timers.current.iv = setInterval(() => setFrame((f) => f + 1), plan.frameMs);
+    timers.current.to = setTimeout(() => {
+      clearInterval(timers.current.iv);
+      setPhase("revealed");
+    }, plan.durationMs);
+    return () => {
+      clearInterval(timers.current.iv);
+      clearTimeout(timers.current.to);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.round, plan.durationMs]);
+
+  const skip = () => {
+    clearInterval(timers.current.iv);
+    clearTimeout(timers.current.to);
+    setPhase("revealed");
+  };
+  const revealed = canSelectDuringReveal(phase);
+
   const open = openSlots(state, formation);
   const filledBySlot = new Map(
     state.picks.map((p) => [p.slotId, index.playerSeasonById.get(p.playerSeasonId) ?? null]),
@@ -143,23 +240,31 @@ function DraftRound({
   const list = spun.selectable
     .filter((p) => (groupFilter ? p.player.posGroup === groupFilter : true))
     .filter((p) => (query ? p.player.name.toLowerCase().includes(query.toLowerCase()) : true))
-    .sort((a, b) => Number(!!a.blockedReason) - Number(!!b.blockedReason) || b.player.ratings.overall - a.player.ratings.overall);
+    .sort((a, b) => {
+      const blocked = Number(!!a.blockedReason) - Number(!!b.blockedReason);
+      if (blocked !== 0) return blocked;
+      if (vis.ratings) return b.player.ratings.overall - a.player.ratings.overall || a.player.id.localeCompare(b.player.id);
+      // hard mode: stable position-then-name order, no rating hints
+      const groupOrder = { GK: 0, DF: 1, MF: 2, FW: 3 } as const;
+      return groupOrder[a.player.posGroup] - groupOrder[b.player.posGroup] || a.player.name.localeCompare(b.player.name);
+    });
 
   const place = (slot: FormationSlot) => {
-    if (!selected || selected.blockedReason) return;
+    if (!revealed || !selected || selected.blockedReason) return;
     if (!selected.eligibleSlots.some((e) => e.slot.id === slot.id)) return;
     onPick(applyPick(state, cs, selected.player.id, slot.id, index));
-    setSelected(null);
-    setQuery("");
-    setGroupFilter(null);
   };
 
   return (
     <div className="space-y-5 pt-2">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <p className="kicker">round {state.round + 1} of 11 · archive key {state.draftSeed}</p>
-          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">The reel lands on…</h1>
+          <p className="kicker">
+            round {state.round + 1} of 11 · {state.mode === "hard" ? "hard mode" : "classic"} · key {state.draftSeed}
+          </p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
+            {revealed ? "The archive opens on…" : "Flipping through the archive…"}
+          </h1>
         </div>
         <div className="font-mono flex gap-1" aria-label={`Round ${state.round + 1} of 11`}>
           {Array.from({ length: 11 }, (_, i) => (
@@ -173,135 +278,90 @@ function DraftRound({
 
       <div className="grid gap-5 lg:grid-cols-[1.35fr_1fr]">
         <div className="space-y-4">
-          {/* spun club-season card */}
-          <div key={cs.id} className="card card-foil spin-reel overflow-hidden">
-            <div className="flex flex-wrap items-baseline justify-between gap-2 px-5 pt-5 sm:px-6">
-              <div>
-                <div className="font-mono text-[0.65rem] uppercase tracking-[0.25em] text-(--color-brass)">
-                  {cs.competition === "EC" ? "European Cup" : "Champions League"} · {cs.season} ·{" "}
-                  {cs.progression === "W" ? "champions" : "finalists"}
-                </div>
-                <h2 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">{cs.clubName}</h2>
-                <p className="font-mono mt-1 text-[0.7rem] text-(--color-chalk-dim)">
-                  {cs.progression === "W" ? "beat" : "lost to"} {cs.opponentClubName} {cs.finalScore} in the final ·{" "}
-                  {cs.eraLabel}
-                </p>
+          {!revealed ? (
+            /* ---- reveal animation: programme pages flipping past ---- */
+            <button
+              type="button"
+              onClick={skip}
+              className="card card-foil block w-full cursor-pointer overflow-hidden px-5 py-14 text-center sm:px-6"
+              aria-label="Skip reveal animation"
+            >
+              <div className="font-mono text-[0.65rem] uppercase tracking-[0.3em] text-(--color-chalk-faint)">
+                european archive · 1955 — today
               </div>
-              <ConfidenceDot label={cs.confidence.label} />
-            </div>
-
-            {/* squad list */}
-            <div className="mt-4 px-5 pb-5 sm:px-6">
-              {spun.selectable.length > 12 && (
-                <div className="mb-3 flex flex-wrap items-center gap-2">
-                  <input
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="search squad…"
-                    className="font-mono w-40 rounded border border-(--color-line) bg-(--color-ink) px-2.5 py-1.5 text-xs text-(--color-chalk)"
-                    aria-label="Search squad"
-                  />
-                  {["GK", "DF", "MF", "FW"].map((g) => (
-                    <button
-                      key={g}
-                      type="button"
-                      onClick={() => setGroupFilter(groupFilter === g ? null : g)}
-                      className={`font-mono rounded border px-2 py-1 text-[0.62rem] uppercase tracking-wider ${
-                        groupFilter === g
-                          ? "border-(--color-brass) text-(--color-brass)"
-                          : "border-(--color-line) text-(--color-chalk-faint) hover:text-(--color-chalk)"
-                      }`}
-                      aria-pressed={groupFilter === g}
-                    >
-                      {g}
-                    </button>
-                  ))}
+              <div
+                key={frame}
+                className="mt-4 text-2xl font-semibold tracking-tight text-(--color-chalk-dim) sm:text-3xl"
+                style={{ opacity: 0.55 + 0.45 * ((frame % 3) / 2) }}
+                aria-live="off"
+              >
+                {plan.decoys.length ? plan.decoys[Math.min(frame, plan.decoys.length - 1)] : "…"}
+              </div>
+              <div className="font-mono mt-6 text-[0.62rem] uppercase tracking-[0.2em] text-(--color-brass)">
+                tap to reveal
+              </div>
+            </button>
+          ) : (
+            /* ---- spun club-season card (finish hidden in ALL modes) ---- */
+            <div key={cs.id} className="card card-foil spin-reel overflow-hidden">
+              <div className="flex flex-wrap items-baseline justify-between gap-2 px-5 pt-5 sm:px-6">
+                <div>
+                  <div className="font-mono text-[0.65rem] uppercase tracking-[0.25em] text-(--color-brass)">
+                    {cs.competition === "EC" ? "European Cup" : "Champions League"} · {cs.season} · {cs.eraLabel}
+                  </div>
+                  <h2 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">{cs.clubName}</h2>
+                  <p className="font-mono mt-1 text-[0.7rem] text-(--color-chalk-dim)">
+                    {cs.country ?? "Europe"} · squad of {cs.playerSeasonIds.length} · pick one immortal
+                  </p>
                 </div>
-              )}
-              <ul className="archive-scroll grid max-h-[26rem] gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
-                {list.map((sp) => {
-                  const p = sp.player;
-                  const isSel = selected?.player.id === p.id;
-                  return (
-                    <li key={p.id}>
+                {vis.confidence && <ConfidenceDot label={cs.confidence.label} />}
+              </div>
+
+              {/* squad list */}
+              <div className="mt-4 px-5 pb-5 sm:px-6">
+                {spun.selectable.length > 12 && (
+                  <div className="mb-3 flex flex-wrap items-center gap-2">
+                    <input
+                      value={query}
+                      onChange={(e) => setQuery(e.target.value)}
+                      placeholder="search squad…"
+                      className="font-mono w-40 rounded border border-(--color-line) bg-(--color-ink) px-2.5 py-1.5 text-xs text-(--color-chalk)"
+                      aria-label="Search squad"
+                    />
+                    {["GK", "DF", "MF", "FW"].map((g) => (
                       <button
+                        key={g}
                         type="button"
-                        disabled={!!sp.blockedReason}
-                        onClick={() => setSelected(isSel ? null : sp)}
-                        className={`w-full rounded-lg border p-3 text-left transition ${
-                          sp.blockedReason
-                            ? "cursor-not-allowed border-(--color-line) opacity-40"
-                            : isSel
-                              ? "border-(--color-brass) bg-(--color-ink-3)"
-                              : "border-(--color-line) bg-(--color-ink) hover:border-(--color-brass-soft)"
+                        onClick={() => setGroupFilter(groupFilter === g ? null : g)}
+                        className={`font-mono rounded border px-2 py-1 text-[0.62rem] uppercase tracking-wider ${
+                          groupFilter === g
+                            ? "border-(--color-brass) text-(--color-brass)"
+                            : "border-(--color-line) text-(--color-chalk-faint) hover:text-(--color-chalk)"
                         }`}
-                        aria-pressed={isSel}
+                        aria-pressed={groupFilter === g}
                       >
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="truncate font-semibold">
-                            {p.name}
-                            {p.captain && <span className="ml-1 text-(--color-brass)" title="captain">©</span>}
-                          </span>
-                          <span className="font-mono text-lg text-(--color-brass)">{Math.round(p.ratings.overall)}</span>
-                        </div>
-                        <div className="font-mono mt-0.5 flex flex-wrap items-center gap-x-2 text-[0.6rem] uppercase tracking-wider text-(--color-chalk-faint)">
-                          <span className="text-(--color-chalk-dim)">{p.pos}</span>
-                          <span>{p.role}</span>
-                          {p.finalGoals > 0 && <span className="text-(--color-brass)">{p.finalGoals}g in final</span>}
-                          {p.careerFinals > 1 && <span>{p.careerFinals} finals</span>}
-                          {p.nationality && <span>{p.nationality}</span>}
-                          {p.confidence.label !== "high" && <span className="text-(--color-blood)">{p.confidence.label} conf</span>}
-                        </div>
-                        {sp.blockedReason && (
-                          <div className="font-mono mt-1 text-[0.6rem] uppercase tracking-wider text-(--color-blood)">
-                            {sp.blockedReason}
-                          </div>
-                        )}
-                        {isSel && (
-                          <div className="mt-2 space-y-1">
-                            <RatingBar label="atk" value={p.ratings.attack} />
-                            <RatingBar label="ctl" value={p.ratings.control} />
-                            <RatingBar label="def" value={p.ratings.defense} />
-                            {p.posGroup === "GK" && <RatingBar label="gk" value={p.ratings.goalkeeping} />}
-                            <RatingBar label="aura" value={p.ratings.uclAura} />
-                            <div className="font-mono pt-1 text-[0.62rem] uppercase tracking-wider text-(--color-chalk-dim)">
-                              place at:{" "}
-                              {sp.eligibleSlots
-                                .slice()
-                                .sort((a, b) => b.fit - a.fit)
-                                .map((e) => (
-                                  <button
-                                    key={e.slot.id}
-                                    type="button"
-                                    onClick={(ev) => {
-                                      ev.stopPropagation();
-                                      place(e.slot);
-                                    }}
-                                    className={`mr-1 mb-1 inline-block rounded border px-2 py-0.5 ${
-                                      e.fit >= 1
-                                        ? "border-(--color-brass) text-(--color-brass)"
-                                        : e.fit >= 0.85
-                                          ? "border-(--color-line) text-(--color-chalk)"
-                                          : "border-(--color-blood) text-(--color-blood)"
-                                    } hover:bg-(--color-ink-2)`}
-                                    title={e.fit < 1 ? `position-fit penalty ×${e.fit}` : "natural position"}
-                                  >
-                                    {e.slot.label}
-                                    {e.fit < 1 ? "*" : ""}
-                                  </button>
-                                ))}
-                            </div>
-                          </div>
-                        )}
+                        {g}
                       </button>
-                    </li>
-                  );
-                })}
-              </ul>
+                    ))}
+                  </div>
+                )}
+                <ul className="archive-scroll grid max-h-[26rem] gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
+                  {list.map((sp) => (
+                    <PlayerRow
+                      key={sp.player.id}
+                      sp={sp}
+                      mode={state.mode}
+                      isSelected={selected?.player.id === sp.player.id}
+                      onToggle={() => setSelected(selected?.player.id === sp.player.id ? null : sp)}
+                      onPlace={place}
+                    />
+                  ))}
+                </ul>
+              </div>
             </div>
-          </div>
+          )}
           <p className="font-mono text-[0.62rem] uppercase tracking-[0.18em] text-(--color-chalk-faint)">
-            no rerolls — the archive gives what it gives. * = out-of-position penalty.
+            no rerolls — the archive gives what it gives. greyed players cannot fit your remaining positions.
           </p>
         </div>
 
@@ -309,7 +369,7 @@ function DraftRound({
         <div className="space-y-3">
           <Pitch
             formation={formation}
-            onSlotClick={selected && !selected.blockedReason ? place : undefined}
+            onSlotClick={revealed && selected && !selected.blockedReason ? place : undefined}
             slots={formation.slots.map((slot) => {
               const player = filledBySlot.get(slot.id) ?? null;
               const cs2 = player ? index.clubSeasonById.get(player.clubSeasonId) : null;
@@ -317,16 +377,137 @@ function DraftRound({
                 slot,
                 player,
                 clubLabel: cs2 ? `${cs2.clubName} ${cs2.season.slice(0, 4)}` : undefined,
-                highlight: !!selected && !selected.blockedReason && selected.eligibleSlots.some((e) => e.slot.id === slot.id),
+                highlight:
+                  revealed && !!selected && !selected.blockedReason && selected.eligibleSlots.some((e) => e.slot.id === slot.id),
               };
             })}
           />
           <p className="font-mono text-center text-[0.62rem] uppercase tracking-[0.18em] text-(--color-chalk-faint)">
-            {selected ? "tap a glowing slot to place " + selected.player.name : `${open.length} positions still open`}
+            {!revealed
+              ? "the reel is still spinning"
+              : selected
+                ? "tap a glowing slot to place " + selected.player.name
+                : `${open.length} positions still open`}
           </p>
         </div>
       </div>
     </div>
+  );
+}
+
+/* ---------------- player row (mode-aware) ---------------- */
+
+function PlayerRow({
+  sp,
+  mode,
+  isSelected,
+  onToggle,
+  onPlace,
+}: {
+  sp: SelectablePlayer;
+  mode: DraftMode;
+  isSelected: boolean;
+  onToggle: () => void;
+  onPlace: (slot: FormationSlot) => void;
+}) {
+  const p = sp.player;
+  const vis = visibilityFor(mode, "draft");
+  return (
+    <li>
+      <button
+        type="button"
+        disabled={!!sp.blockedReason}
+        aria-disabled={!!sp.blockedReason}
+        onClick={onToggle}
+        className={`w-full rounded-lg border p-3 text-left transition ${
+          sp.blockedReason
+            ? "cursor-not-allowed border-(--color-line) opacity-40"
+            : isSelected
+              ? "border-(--color-brass) bg-(--color-ink-3)"
+              : "border-(--color-line) bg-(--color-ink) hover:border-(--color-brass-soft)"
+        }`}
+        aria-pressed={isSelected}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <span className="truncate font-semibold">
+            {p.name}
+            {vis.captain && p.captain && <span className="ml-1 text-(--color-brass)" title="captain">©</span>}
+          </span>
+          {vis.ratings ? (
+            <span className="font-mono text-lg text-(--color-brass)">{Math.round(p.ratings.overall)}</span>
+          ) : (
+            <span className="font-mono text-xs text-(--color-chalk-faint)">{p.pos}</span>
+          )}
+        </div>
+        <div className="font-mono mt-0.5 flex flex-wrap items-center gap-x-2 text-[0.6rem] uppercase tracking-wider text-(--color-chalk-faint)">
+          <span className="text-(--color-chalk-dim)">{p.pos}</span>
+          {vis.role && p.role !== "squad" && <span>{p.role}</span>}
+          {vis.stats && p.finalGoals > 0 && <span className="text-(--color-brass)">{p.finalGoals}g in final</span>}
+          {vis.stats && p.seasonGoals !== null && p.seasonGoals > 0 && (
+            <span className="text-(--color-brass)">{p.seasonGoals}g in europe</span>
+          )}
+          {vis.stats && p.seasonApps !== null && <span>{p.seasonApps} euro apps</span>}
+          {vis.stats && p.careerFinals > 1 && <span>{p.careerFinals} finals</span>}
+          {p.nationality && <span>{p.nationality}</span>}
+          {vis.confidence && p.confidence.label !== "high" && (
+            <span className="text-(--color-blood)">{p.confidence.label} conf</span>
+          )}
+        </div>
+        {sp.blockedReason && (
+          <div className="font-mono mt-1 text-[0.6rem] uppercase tracking-wider text-(--color-blood)">
+            {sp.blockedReason}
+          </div>
+        )}
+        {isSelected && (
+          <div className="mt-2 space-y-1">
+            {vis.ratings && (
+              <>
+                <RatingBar label="atk" value={p.ratings.attack} />
+                <RatingBar label="ctl" value={p.ratings.control} />
+                <RatingBar label="def" value={p.ratings.defense} />
+                {p.posGroup === "GK" && <RatingBar label="gk" value={p.ratings.goalkeeping} />}
+                <RatingBar label="aura" value={p.ratings.uclAura} />
+              </>
+            )}
+            <div className="font-mono pt-1 text-[0.62rem] uppercase tracking-wider text-(--color-chalk-dim)">
+              place at:{" "}
+              {sp.eligibleSlots
+                .slice()
+                .sort((a, b) => b.fit - a.fit)
+                .map((e) => (
+                  <span
+                    key={e.slot.id}
+                    role="button"
+                    tabIndex={0}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      onPlace(e.slot);
+                    }}
+                    onKeyDown={(ev) => {
+                      if (ev.key === "Enter" || ev.key === " ") {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                        onPlace(e.slot);
+                      }
+                    }}
+                    className={`mr-1 mb-1 inline-block cursor-pointer rounded border px-2 py-0.5 ${
+                      e.fit >= 1
+                        ? "border-(--color-brass) text-(--color-brass)"
+                        : e.fit >= 0.85
+                          ? "border-(--color-line) text-(--color-chalk)"
+                          : "border-(--color-blood) text-(--color-blood)"
+                    } hover:bg-(--color-ink-2)`}
+                    title={e.fit < 1 ? `position-fit penalty ×${e.fit}` : "natural position"}
+                  >
+                    {e.slot.label}
+                    {e.fit < 1 ? "*" : ""}
+                  </span>
+                ))}
+            </div>
+          </div>
+        )}
+      </button>
+    </li>
   );
 }
 
@@ -347,6 +528,7 @@ function Review({ state, index }: { state: DraftState; index: GameDataIndex }) {
         {
           dataVersion: index.data.dataVersion,
           simVersion: SIM_VERSION,
+          mode: state.mode,
           formationId: state.formationId,
           draftSeed: state.draftSeed,
           playerSeasonIds: formation.slots.map((s) => bySlot.get(s.id)!),
@@ -356,12 +538,11 @@ function Review({ state, index }: { state: DraftState; index: GameDataIndex }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [state, index],
   );
-  const avgConf = profile.avgConfidence;
 
   return (
     <div className="space-y-6 pt-2">
       <div className="rise">
-        <p className="kicker">the team sheet is signed</p>
+        <p className="kicker">the team sheet is signed{state.mode === "hard" ? " · hard mode — all hidden info now revealed" : ""}</p>
         <h1 className="mt-1 text-3xl font-semibold tracking-tight sm:text-4xl">Your Immortal XI</h1>
       </div>
 
@@ -386,8 +567,23 @@ function Review({ state, index }: { state: DraftState; index: GameDataIndex }) {
             <RatingBar label="aura" value={profile.aura} />
             <div className="font-mono flex justify-between pt-2 text-[0.68rem] uppercase tracking-wider text-(--color-chalk-dim)">
               <span>chemistry {profile.chemistry >= 0 ? "+" : ""}{profile.chemistry.toFixed(1)}</span>
-              <span>data confidence {(avgConf * 100).toFixed(0)}%</span>
+              <span>data confidence {(profile.avgConfidence * 100).toFixed(0)}%</span>
             </div>
+          </div>
+
+          <div className="card rise rise-2 p-5">
+            <p className="kicker mb-2">where your immortals came from</p>
+            <ul className="space-y-1 text-sm text-(--color-chalk-dim)">
+              {[...new Set(state.picks.map((p) => p.clubSeasonId))].map((csId) => {
+                const cs = index.clubSeasonById.get(csId)!;
+                return (
+                  <li key={csId}>
+                    — {cs.clubName} {cs.season}:{" "}
+                    <span className="text-(--color-chalk-faint)">{cs.category.replace(/_/g, " ")}</span>
+                  </li>
+                );
+              })}
+            </ul>
           </div>
 
           <div className="card rise rise-2 p-5">
@@ -413,9 +609,6 @@ function Review({ state, index }: { state: DraftState; index: GameDataIndex }) {
           >
             Kick off the campaign →
           </button>
-          <p className="font-mono break-all text-[0.6rem] leading-relaxed text-(--color-chalk-faint)">
-            share seed: {seed}
-          </p>
         </div>
       </div>
     </div>

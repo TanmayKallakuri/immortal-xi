@@ -1,10 +1,12 @@
-# Simulation Model (sim v1.0.0)
+# Simulation Model (sim v2.0.0)
+
+> v2.0.0: role-aware slot-class position fits (see below), assist attribution on goal events, and ratings formula v2 — all team strengths changed, so v1 seeds are rejected with a version message.
 
 All randomness flows through `lib/rng.ts` (xmur3 + mulberry32), seeded from share-seed contents. **Same seed + same SIM_VERSION ⇒ identical campaign. Same two seeds + mode + SIM_VERSION ⇒ identical battle.** Any logic or tuning change bumps `SIM_VERSION` (`lib/simulation/version.ts`), and old seeds are rejected with an explicit message.
 
 ## Team strength (`lib/simulation/strength.ts`)
 
-Per-slot player ratings are weighted by position fit (GK hard-gated to goal; adjacent-group penalties 0.85 / 0.7) and aggregated:
+Per-slot player ratings are weighted by position fit and aggregated. Fits come from the slot-class system in `lib/draft/formations.ts`: every slot is GK / wide-or-central DF / MF / FW, and every historical position code maps to the classes it can cover with penalties (a winger fits wide-midfield at 0.92; a pure CF fits nothing but forward slots; GK hard-gated both ways; fit 0 = ineligible and undraftable into that slot):
 
 - **attack** — FW-weighted (FW 1.0 / MF 0.6 / DF 0.25)
 - **control** — MF-weighted; **defense** — DF + GK weighted; **goalkeeping** — the keeper
@@ -17,7 +19,7 @@ Per-slot player ratings are weighted by position fit (GK hard-gated to goal; adj
 ## Match engine (`lib/simulation/engine.ts`)
 
 - xG per side from a logistic comparison of (attack + 0.45·control + chemistry + aura trickle) vs (defense + 0.55·goalkeeping + chemistry): neutral baseline ≈ 1.35, clamped [0.15, 4.2]; home boost ×1.12.
-- Goals drawn from a Poisson via the seeded stream; scorers weighted by player attack rating; events (goals, penalties, saves by elite keepers, late drama) build the timeline. Clutch-heavy sides skew goals later.
+- Goals drawn from a Poisson via the seeded stream; scorers weighted by player attack rating; assists (≈72% of open-play goals) weighted by control+attack and never credited to the scorer; events (goals, penalties, saves by elite keepers, late drama) build the timeline. Clutch-heavy sides skew goals later.
 - Extra time = 0.34× xG period; then penalties: per-kick conversion from taker clutch vs keeper rating, 5 kicks + sudden death.
 
 ## Solo campaign (`lib/simulation/campaign.ts`)

@@ -108,7 +108,57 @@ async function main() {
   };
   console.log(`[final-pages] done — ${okPages}/${finalPages.length}`);
 
-  // ---- 3. footballcsv match results ----
+  // ---- 3. curated iconic club-season squad pages ----
+  try {
+    const curationPath = path.join(process.cwd(), "data", "curation", "iconic-club-seasons.json");
+    const curation = JSON.parse(fs.readFileSync(curationPath, "utf8")) as {
+      entries: Array<{ club: string; season: string; squadPage?: string }>;
+    };
+    const pages = curation.entries.filter((e) => e.squadPage);
+    let okSquads = 0;
+    const failedSquads: string[] = [];
+    for (const entry of pages) {
+      try {
+        if (loadRaw("wikipedia-club-season-pages", entry.squadPage!)) {
+          okSquads++;
+          continue;
+        }
+        const { wikitext, url } = await fetchWikitext(entry.squadPage!);
+        saveRaw(db, {
+          sourceId: "wikipedia-club-season-pages",
+          recordKey: entry.squadPage!, // stable key = curation entry, redirects resolved upstream
+          url,
+          retrievedAt: new Date().toISOString(),
+          parserVersion: PARSER_VERSION,
+          payload: wikitext,
+        });
+        okSquads++;
+        await sleep(250);
+      } catch (e) {
+        failedSquads.push(entry.squadPage!);
+        console.error(`[club-season-pages] failed: ${entry.squadPage}: ${e}`);
+      }
+    }
+    setSourceStatus(
+      db,
+      "wikipedia-club-season-pages",
+      okSquads > 0 ? "ok" : "blocked",
+      `${okSquads}/${pages.length} squad pages fetched` +
+        (failedSquads.length ? `; failed: ${failedSquads.join(", ")}` : ""),
+    );
+    log.sources["wikipedia-club-season-pages"] = {
+      status: okSquads > 0 ? "ok" : "blocked",
+      note: `${okSquads}/${pages.length}`,
+      records: okSquads,
+    };
+    console.log(`[club-season-pages] done — ${okSquads}/${pages.length}`);
+  } catch (e) {
+    setSourceStatus(db, "wikipedia-club-season-pages", "blocked", String(e));
+    log.sources["wikipedia-club-season-pages"] = { status: "blocked", note: String(e), records: 0 };
+    console.error(`[club-season-pages] BLOCKED: ${e}`);
+  }
+
+  // ---- 4. footballcsv match results ----
   try {
     // One git-trees API call (rate-limit friendly), then raw downloads.
     let tree: Array<{ path: string; type: string }> = [];

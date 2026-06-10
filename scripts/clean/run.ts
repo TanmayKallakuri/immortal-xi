@@ -9,10 +9,10 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { openDb } from "../../db";
+import { openDb, CANONICAL_TABLES, DDL } from "../../db";
 import * as t from "../../db/schema";
 import { loadRaw, listRaw, PARSER_VERSION } from "../ingest/framework";
-import { parseFinalsList, parseFinalPage, type LineupBlock } from "./parsers";
+import { parseFinalsList, parseFinalPage, parseSquadPage, type LineupBlock } from "./parsers";
 import {
   resolveClub,
   resolvePlayer,
@@ -35,13 +35,11 @@ interface FlagInput {
 async function main() {
   const { db, sqlite } = openDb();
 
-  // Rebuild canonical layer from scratch (raw layer untouched).
-  const canonicalTables = [
-    "competitions", "seasons", "rounds", "clubs", "club_aliases", "club_seasons",
-    "players", "player_aliases", "player_seasons", "squads", "matches",
-    "appearances", "goals", "positions", "data_quality_flags", "manual_overrides",
-  ];
-  for (const tbl of canonicalTables) sqlite.exec(`DELETE FROM ${tbl};`);
+  // Rebuild canonical layer from scratch (raw layer untouched). Tables are
+  // dropped + recreated so schema changes apply without migrations — the
+  // canonical layer is a derived artifact, not a stateful store.
+  for (const tbl of CANONICAL_TABLES) sqlite.exec(`DROP TABLE IF EXISTS ${tbl};`);
+  sqlite.exec(DDL);
 
   const flags: FlagInput[] = [];
   const flag = (f: FlagInput) => flags.push(f);
@@ -510,6 +508,218 @@ async function main() {
     }
   }
 
+  // ---------- curated iconic club-seasons ----------
+  // Enrichment (category/tags) for teams that already have squads, plus full
+  // squad ingestion from Wikipedia club-season articles for iconic
+  // non-finalists. Curation lives in data/curation/iconic-club-seasons.json.
+  const PROGRESSION_BY_CATEGORY: Record<string, string> = {
+    champion: "W",
+    runner_up: "RU",
+    semi_finalist: "SF",
+    quarter_finalist: "QF",
+    round_of_16: "R16",
+    group_stage_iconic: "GS",
+    league_phase_iconic: "GS",
+  };
+  const curationPath = path.join(process.cwd(), "data", "curation", "iconic-club-seasons.json");
+  let curatedSquads = 0;
+  let curatedEnriched = 0;
+  if (fs.existsSync(curationPath)) {
+    const curation = JSON.parse(fs.readFileSync(curationPath, "utf8")) as {
+      entries: Array<{
+        club: string;
+        season: string;
+        category: string;
+        tags: string[];
+        squadPage?: string;
+        note?: string;
+        sourceRef?: string;
+      }>;
+    };
+    for (const entry of curation.entries) {
+      const norm = normalizeSeason(entry.season);
+      if (!norm) {
+        flag({ entityType: "curation", entityId: entry.club, flagType: "bad-season-format", severity: "error", detail: entry.season });
+        continue;
+      }
+      const club = registerClub(entry.club, "curation:iconic-club-seasons");
+      const csId = `cs-${club.clubId}-${norm.seasonId}`;
+      const existing = clubSeasonRows.find((c) => c.id === csId);
+
+      if (existing && existing.squadComplete) {
+        // finalist already carrying a parsed squad — enrich only
+        existing.category = entry.category;
+        existing.tags = JSON.stringify(entry.tags);
+        curatedEnriched++;
+        continue;
+      }
+
+      // needs a squad from its club-season article (or stays category-only)
+      let squadAttached = false;
+      if (entry.squadPage) {
+        const raw = loadRaw("wikipedia-club-season-pages", entry.squadPage);
+        if (!raw) {
+          flag({ entityType: "club_season", entityId: csId, flagType: "missing-squad-page", severity: "warn", detail: `raw payload for "${entry.squadPage}" not ingested` });
+        } else {
+          const recordId = `wikipedia-club-season-pages:${slugify(raw.recordKey)}`;
+          const parsed = parseSquadPage(raw.payload);
+          for (const a of parsed.anomalies) {
+            flag({ entityType: "club_season", entityId: csId, flagType: "parse-anomaly", severity: "warn", detail: `${entry.squadPage}: ${a}` });
+          }
+          const hasGk = parsed.players.some((p) => p.pos === "GK");
+          if (parsed.players.length >= 11 && hasGk) {
+            // squad-list evidence; per-player European stats raise confidence
+            const csConfidence = parsed.hasSeasonStats ? 0.78 : 0.7;
+            for (const sp of parsed.players) {
+              const rp = resolvePlayer(sp.linkTarget, sp.displayName);
+              if (!playerRows.has(rp.playerId)) {
+                playerRows.set(rp.playerId, {
+                  id: rp.playerId,
+                  name: rp.displayName,
+                  nationality: sp.nationality,
+                  identityEvidence: rp.identityEvidence,
+                  wikiTitle: sp.linkTarget,
+                });
+                if (rp.identityEvidence === "name-only") {
+                  flag({ entityType: "player", entityId: rp.playerId, flagType: "name-only-identity", severity: "warn", detail: `no wikilink for "${rp.displayName}" — duplicate risk` });
+                }
+              }
+              const psId = `ps-${rp.playerId.slice(2)}-${norm.endYear}`;
+              const psKey = `${rp.playerId}@${csId}`;
+              if (playerSeasonIndex.has(psKey)) continue;
+              if (playerSeasonRows.some((r) => r.id === psId)) {
+                flag({ entityType: "player_season", entityId: psId, flagType: "duplicate-candidate", severity: "info", detail: `${rp.displayName} already has a player-season this season (mid-season transfer or shared identity); kept first` });
+                continue;
+              }
+              playerSeasonIndex.set(psKey, psId);
+              const psConf = rp.identityEvidence === "name-only" ? csConfidence * 0.8 : csConfidence;
+              const posRes = posToGroup(sp.pos);
+              playerSeasonRows.push({
+                id: psId,
+                playerId: rp.playerId,
+                clubSeasonId: csId,
+                pos: sp.pos,
+                posGroup: posRes.group,
+                posInferred: !posRes.confident,
+                shirt: sp.shirt,
+                nationality: sp.nationality,
+                captain: false,
+                role: "squad",
+                finalGoals: 0,
+                continentalApps: sp.continentalApps,
+                continentalGoals: sp.continentalGoals,
+                confidenceScore: Math.round(psConf * 100) / 100,
+                confidenceLabel: psConf >= 0.8 ? "high" : psConf >= 0.65 ? "medium" : "low",
+                needsReview: sp.continentalApps === null,
+                reviewReason:
+                  sp.continentalApps === null ? "squad-list evidence only (no per-player season stats)" : null,
+                sourceRecordId: recordId,
+              });
+              squadRows.push({ clubSeasonId: csId, playerSeasonId: psId });
+            }
+            squadAttached = true;
+            curatedSquads++;
+            const progression = PROGRESSION_BY_CATEGORY[entry.category] ?? "PART";
+            if (existing) {
+              existing.progression = progression;
+              existing.category = entry.category;
+              existing.tags = JSON.stringify(entry.tags);
+              existing.squadComplete = true;
+              existing.starterCount = 0;
+              existing.playerCount = parsed.players.length;
+              existing.hasGoalkeeper = true;
+              existing.confidenceScore = csConfidence;
+              existing.confidenceLabel = "medium";
+              existing.needsReview = true;
+              existing.reviewReason = "squad-list evidence only";
+              existing.sourceRecordId = recordId;
+            } else {
+              clubSeasonRows.push({
+                id: csId,
+                clubId: club.clubId,
+                seasonId: norm.seasonId,
+                progression,
+                category: entry.category,
+                tags: JSON.stringify(entry.tags),
+                finalScore: null,
+                squadComplete: true,
+                starterCount: 0,
+                playerCount: parsed.players.length,
+                hasGoalkeeper: true,
+                confidenceScore: csConfidence,
+                confidenceLabel: "medium",
+                needsReview: true,
+                reviewReason: "squad-list evidence only",
+                sourceRecordId: recordId,
+              });
+              clubSeasonIds.add(csId);
+            }
+          }
+        }
+      }
+      if (!squadAttached) {
+        // category-only enrichment (no usable squad — stays non-draftable)
+        if (existing) {
+          existing.category = entry.category;
+          existing.tags = JSON.stringify(entry.tags);
+          curatedEnriched++;
+        } else {
+          clubSeasonRows.push({
+            id: csId,
+            clubId: club.clubId,
+            seasonId: norm.seasonId,
+            progression: PROGRESSION_BY_CATEGORY[entry.category] ?? "PART",
+            category: entry.category,
+            tags: JSON.stringify(entry.tags),
+            finalScore: null,
+            squadComplete: false,
+            starterCount: 0,
+            playerCount: 0,
+            hasGoalkeeper: false,
+            confidenceScore: 0.5,
+            confidenceLabel: "low",
+            needsReview: true,
+            reviewReason: "curated iconic team without squad evidence",
+            sourceRecordId: null,
+          });
+          clubSeasonIds.add(csId);
+          curatedEnriched++;
+        }
+      }
+    }
+  }
+
+  // ---------- factual category for every club-season ----------
+  // Curated categories stand; everything else derives from evidence:
+  // finalists from the finals list, others from round reached in match data.
+  const roundOrdinalByName = (name: string): number => {
+    const n = name.toLowerCase();
+    if (n.includes("final") && !n.includes("semi") && !n.includes("quarter")) return 6;
+    if (n.includes("semi")) return 5;
+    if (n.includes("quarter")) return 4;
+    if (n.includes("16") || n.includes("second round") || n.includes("eighth")) return 3;
+    if (n.includes("group") || n.includes("league")) return 2;
+    return 1;
+  };
+  const roundNameById = new Map(roundRows.map((r) => [r.id, r.name]));
+  const bestRoundByCs = new Map<string, number>();
+  for (const m of matchRows) {
+    const score = roundOrdinalByName(roundNameById.get(m.roundId) ?? "");
+    for (const csId of [m.homeClubSeasonId, m.awayClubSeasonId]) {
+      bestRoundByCs.set(csId, Math.max(bestRoundByCs.get(csId) ?? 0, score));
+    }
+  }
+  for (const cs of clubSeasonRows) {
+    if (cs.category && cs.category !== "participant") continue; // curated
+    if (cs.progression === "W") cs.category = "champion";
+    else if (cs.progression === "RU") cs.category = "runner_up";
+    else {
+      const best = bestRoundByCs.get(cs.id!) ?? 0;
+      cs.category =
+        best >= 5 ? "semi_finalist" : best === 4 ? "quarter_finalist" : best === 3 ? "round_of_16" : best === 2 ? "group_stage" : "participant";
+    }
+  }
+
   // ---------- impossible-squad / sanity checks ----------
   for (const cs of clubSeasonRows) {
     if (cs.playerCount! > 0 && cs.playerCount! < 11) {
@@ -611,6 +821,7 @@ async function main() {
   console.log(`  goals:          ${goalRows.length}`);
   console.log(`  quality flags:  ${flags.length}`);
   console.log(`  overrides:      ${overrideCount}`);
+  console.log(`  curated squads: ${curatedSquads} ingested, ${curatedEnriched} category-enriched`);
   sqlite.close();
 }
 

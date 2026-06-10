@@ -1,106 +1,154 @@
 /**
- * Player-season rating model. FORMULA_VERSION bumps on any change.
+ * Player-season rating model v2. FORMULA_VERSION bumps on any change.
  *
  * Philosophy (see docs/RATINGS.md):
- * - Season-specific: the same player rates differently in 1960 vs 1964.
- * - Evidence-driven: every input below is observed in canonical data
- *   (role in the final, goals in the final, captaincy, career finals count).
- * - Cross-era normalized: a 1957 European Cup winner's starter and a 2024
- *   winner's starter share the same base. Sparse old data lowers CONFIDENCE,
- *   never the rating itself. Confidence feeds simulation variance.
- * - Explainable: computeRatings returns the weighted parts it used.
- * - Bounded: all outputs clamped to [40, 99].
+ * - SEASON-SPECIFIC: ratings describe one player-season, never a career.
+ *   Career inputs (finals played across years) are firewalled into ucl_aura
+ *   (+ a tiny clutch term) and CANNOT touch overall.
+ * - EVIDENCE-FIRST: personal evidence in that season (started the final,
+ *   goals in the final, captaincy) drives overall above the context base.
+ * - TEAM ACHIEVEMENT IS CAPPED: the only team input to overall is the
+ *   context base tier, whose spread is capped by TEAM_CONTEXT_SPREAD_CAP —
+ *   a squad player on a dominant team cannot outrank a decisive star.
+ * - CROSS-ERA NORMALIZED: a 1957 winner's starter and a 2024 winner's
+ *   starter share the same base. Sparse old data lowers CONFIDENCE (wider
+ *   sim variance, higher rarity), never the rating itself.
+ * - EXPLAINABLE + BOUNDED: every output returns its weighted parts; all
+ *   values clamp to [RATING_MIN, RATING_MAX]. All weights live in config.ts.
  */
 
 import type { PlayerRatings, PosGroup } from "../types";
+import * as W from "./config";
 
-export const FORMULA_VERSION = "1.0.0";
+export const FORMULA_VERSION = "2.0.0";
+
+export type EvidenceRole = "starter" | "sub" | "bench" | "squad";
+export type TeamTier = "W" | "RU" | "SF" | "QF" | "R16" | "GS" | "PART";
 
 export interface RatingInputs {
   posGroup: PosGroup;
-  role: "starter" | "sub" | "bench";
-  progression: "W" | "RU";
+  role: EvidenceRole;
+  /** how far the club-season went (drives context base + modest clutch) */
+  teamTier: TeamTier;
+  /** goals in that season's final (player-season evidence) */
   finalGoals: number;
+  /** European appearances/goals that season where the source carries them */
+  continentalApps?: number | null;
+  continentalGoals?: number | null;
   captain: boolean;
-  careerFinals: number; // finals appeared in across the dataset (>=1)
+  /** career-to-date pedigree — aura/clutch ONLY, never overall */
+  careerFinals: number;
   careerFinalWins: number;
   endYear: number;
-  confidenceScore: number; // 0..1, NOT used to lower ratings — only rarity
+  confidenceScore: number; // 0..1 — rarity + sim variance only
+  /** curated tags of the club-season (rarity flavor only) */
+  tags?: string[];
 }
 
 export interface RatingExplanation {
-  base: number;
-  goalBonus: number;
-  dynastyBonus: number;
+  contextBase: number;
+  personalGoalBonus: number;
   captainBonus: number;
+  careerExcludedFromOverall: true;
   parts: Record<string, number>;
 }
 
-export const clamp = (v: number, lo = 40, hi = 99): number =>
+export const clamp = (v: number, lo = W.RATING_MIN, hi = W.RATING_MAX): number =>
   Math.max(lo, Math.min(hi, Math.round(v * 10) / 10));
 
-const BASE: Record<string, number> = {
-  "starter:W": 84,
-  "starter:RU": 81,
-  "sub:W": 79,
-  "sub:RU": 77,
-  "bench:W": 76,
-  "bench:RU": 74,
-};
+export function contextBaseFor(role: EvidenceRole, tier: TeamTier): number {
+  if (role === "squad") {
+    const key = `squad:${tier}` as keyof typeof W.CONTEXT_BASE;
+    return W.CONTEXT_BASE[key] ?? W.CONTEXT_BASE["squad:PART"];
+  }
+  const key = `${role}:${tier}` as keyof typeof W.CONTEXT_BASE;
+  // finalist roles only exist with W/RU tiers; anything else falls back
+  return W.CONTEXT_BASE[key] ?? W.CONTEXT_BASE["squad:PART"];
+}
 
 export function computeRatings(inp: RatingInputs): { ratings: PlayerRatings; explanation: RatingExplanation } {
-  const base = BASE[`${inp.role}:${inp.progression}`] ?? 74;
-  const goalBonus = Math.min(5, inp.finalGoals * 2.5);
-  const dynastyBonus = Math.min(6, Math.max(0, inp.careerFinals - 1) * 1.2 + inp.careerFinalWins * 0.8);
-  const captainBonus = inp.captain ? 1 : 0;
+  const contextBase = contextBaseFor(inp.role, inp.teamTier);
+  const personalGoalBonus = Math.min(W.FINAL_GOAL_OVERALL_CAP, inp.finalGoals * W.FINAL_GOAL_OVERALL);
+  const captainBonus = inp.captain ? W.CAPTAIN_OVERALL : 0;
 
-  const overall = clamp(base + goalBonus * 0.6 + dynastyBonus + captainBonus);
+  // continental season evidence: importance within that team-season
+  const contGoals = inp.continentalGoals ?? null;
+  const contApps = inp.continentalApps ?? null;
+  const continentalGoalBonus =
+    contGoals !== null ? Math.min(W.CONTINENTAL_GOAL_OVERALL_CAP, contGoals * W.CONTINENTAL_GOAL_OVERALL) : 0;
+  const appsAdj =
+    contApps === null
+      ? 0
+      : contApps >= W.CONTINENTAL_APPS_CORE
+        ? W.CONTINENTAL_APPS_CORE_BONUS
+        : contApps >= W.CONTINENTAL_APPS_ROTATION
+          ? W.CONTINENTAL_APPS_ROTATION_BONUS
+          : contApps <= W.CONTINENTAL_APPS_FRINGE_MAX
+            ? W.CONTINENTAL_APPS_FRINGE_PENALTY
+            : 0;
+
+  // overall: context base + personal season evidence. NO career terms.
+  const overall = clamp(contextBase + personalGoalBonus + captainBonus + continentalGoalBonus + appsAdj);
 
   const g = inp.posGroup;
   const attack = clamp(
-    g === "FW" ? overall + 4 + inp.finalGoals * 1.5
-    : g === "MF" ? overall - 2 + inp.finalGoals * 1.5
-    : g === "DF" ? overall - 12 + inp.finalGoals
-    : 38,
+    g === "GK"
+      ? W.ATTACK_GK_FLOOR
+      : overall +
+          W.ATTACK_TEMPLATE[g]! +
+          (g !== "DF" ? inp.finalGoals * W.FINAL_GOAL_ATTACK : inp.finalGoals) +
+          (g !== "DF" && contGoals ? Math.min(6, contGoals * W.CONTINENTAL_GOAL_ATTACK) : 0),
   );
-  const control = clamp(
-    g === "MF" ? overall + 3
-    : g === "FW" ? overall - 6
-    : g === "DF" ? overall - 5
-    : overall - 25,
+  const control = clamp(overall + W.CONTROL_TEMPLATE[g]);
+  const defense = clamp(overall + W.DEFENSE_TEMPLATE[g]);
+  const physical = clamp(
+    W.PHYSICAL_BASE + (overall - 78) * W.PHYSICAL_SLOPE + (g === "DF" || g === "MF" ? W.PHYSICAL_DF_MF_BONUS : 0),
   );
-  const defense = clamp(
-    g === "DF" ? overall + 4
-    : g === "GK" ? overall - 2
-    : g === "MF" ? overall - 8
-    : overall - 20,
-  );
-  const physical = clamp(70 + (overall - 78) * 0.5 + (g === "DF" || g === "MF" ? 3 : 0));
-  const goalkeeping = clamp(g === "GK" ? overall + 2 : 20);
-  const clutch = clamp(65 + inp.finalGoals * 6 + inp.careerFinalWins * 3 + (inp.captain ? 2 : 0));
-  const uclAura = clamp(60 + inp.careerFinals * 5 + inp.careerFinalWins * 4);
+  const goalkeeping = clamp(g === "GK" ? overall + W.GOALKEEPING_GK_BONUS : W.GOALKEEPING_OUTFIELD);
 
-  // Rarity: how collectible the card feels. Older eras and champions are rarer;
-  // low data confidence makes a pick *rarer* (a deep cut), never worse.
-  const decade = Math.floor(inp.endYear / 10) * 10;
-  const eraRarity =
-    decade <= 1960 ? 80 : decade <= 1980 ? 70 : decade <= 1990 ? 60 : decade <= 2000 ? 52 : 45;
+  // clutch: personal evidence first; champion context modest; career tiny
+  const clutch = clamp(
+    W.CLUTCH_BASE +
+      inp.finalGoals * W.CLUTCH_FINAL_GOAL +
+      (contGoals ? Math.min(8, contGoals * W.CONTINENTAL_GOAL_CLUTCH) : 0) +
+      (inp.captain ? W.CLUTCH_CAPTAIN : 0) +
+      (inp.teamTier === "W" ? W.CLUTCH_CHAMPION : 0) +
+      Math.min(W.CLUTCH_CAREER_CAP, Math.max(0, inp.careerFinals - 1) * W.CLUTCH_CAREER_PER_EXTRA_FINAL),
+  );
+
+  // aura: the ONLY home of career pedigree
+  const uclAura = clamp(
+    Math.min(
+      W.AURA_CAP,
+      W.AURA_BASE + inp.careerFinals * W.AURA_PER_CAREER_FINAL + inp.careerFinalWins * W.AURA_PER_CAREER_WIN,
+    ),
+  );
+
+  // rarity: era + champion + deep-archive + cult flavor (cosmetic)
+  const eraRarity = W.RARITY_BY_DECADE.find(([until]) => inp.endYear <= until)?.[1] ?? 45;
+  const cultTags = ["upset_team", "cult_team", "historic_giant_killer", "data_incomplete_but_iconic"];
   const rarity = clamp(
-    eraRarity + (inp.progression === "W" ? 5 : 0) + (inp.confidenceScore < 0.7 ? 5 : 0) + dynastyBonus,
+    eraRarity +
+      (inp.teamTier === "W" ? W.RARITY_CHAMPION : 0) +
+      (inp.confidenceScore < 0.7 ? W.RARITY_LOW_CONFIDENCE : 0) +
+      ((inp.tags ?? []).some((t) => cultTags.includes(t)) ? W.RARITY_CULT_TAGS : 0),
   );
 
   return {
     ratings: { overall, attack, control, defense, physical, goalkeeping, clutch, uclAura, rarity },
     explanation: {
-      base,
-      goalBonus,
-      dynastyBonus,
+      contextBase,
+      personalGoalBonus,
       captainBonus,
+      careerExcludedFromOverall: true,
       parts: {
-        role: base,
-        finalGoals: goalBonus,
-        dynasty: dynastyBonus,
+        contextBase,
+        finalGoals: personalGoalBonus,
+        continentalGoals: continentalGoalBonus,
+        continentalApps: appsAdj,
         captaincy: captainBonus,
+        auraCareerFinals: inp.careerFinals * W.AURA_PER_CAREER_FINAL,
+        auraCareerWins: inp.careerFinalWins * W.AURA_PER_CAREER_WIN,
         eraRarity,
       },
     },
@@ -123,7 +171,7 @@ export function ratingsSane(r: PlayerRatings): string[] {
   const problems: string[] = [];
   for (const [k, v] of Object.entries(r)) {
     if (typeof v !== "number" || !Number.isFinite(v)) problems.push(`${k} not finite`);
-    else if (v < 40 || v > 99) problems.push(`${k}=${v} out of [40,99]`);
+    else if (v < W.RATING_MIN || v > W.RATING_MAX) problems.push(`${k}=${v} out of [${W.RATING_MIN},${W.RATING_MAX}]`);
   }
   return problems;
 }

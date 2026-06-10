@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseFinalPage, parseFinalsList } from "../scripts/clean/parsers";
+import { parseFinalPage, parseFinalsList, parseSquadPage } from "../scripts/clean/parsers";
 
 const CLASSIC_PAGE = `
 ==Match==
@@ -147,6 +147,59 @@ const LIST_SNIPPET = `
 |align=center|64,400
 |}
 `;
+
+const SQUAD_PAGE_EFS = `
+==Transfers==
+Some transfer prose with [[Player Links]].
+==Squad statistics==
+{{Efs start|League|Cup|Champions League}}
+{{Efs player|no=1 |name=[[Keeper One]]|pos=GK|nat=BRA |37|0|0|0|12|0}}
+{{Efs player|no=4 |name=[[Centre Back]]|pos=DF|nat=NED |33|3|3|1|11|1}}
+{{Efs player|no=10|name=[[Star Creator]]|pos=MF|nat=SRB |34|28|4|1|17+1|9}}
+{{Efs player|no=9 |name=[[Fringe Striker]]|pos=FW|nat=ARG |1+1|0|1|0|0+1|0}}
+{{Efs end}}
+===Out on loan===
+{{Efs player|no=99|name=[[Loaned Away]]|pos=FW|nat=GER |0|0|0|0|0|0}}
+`;
+
+const SQUAD_PAGE_FBSI = `
+==Squad information==
+{{fb si header |age=y}}
+{{fb si player |bg=y |p=[[Old Keeper]] |eu=y |nb=CMR |n=1 |pos=GK |age={{Age|1984|2|18|2013|6|30}} |s=2012 |a=12 |g=0 }}
+{{fb si player |p=[[Right Back]] |nb=ESP |n=2 |pos=RB |age={{Age|1985|1|10|2013|6|30}} |a=30 |g=1 }}
+`;
+
+describe("parseSquadPage", () => {
+  const efs = parseSquadPage(SQUAD_PAGE_EFS);
+
+  it("parses Efs squads with European apps/goals from the last stat pair", () => {
+    expect(efs.hasSeasonStats).toBe(false); // <8 stat rows in fixture
+    const star = efs.players.find((p) => p.displayName === "Star Creator")!;
+    expect(star.continentalApps).toBe(18); // 17+1
+    expect(star.continentalGoals).toBe(9);
+    const fringe = efs.players.find((p) => p.displayName === "Fringe Striker")!;
+    expect(fringe.continentalApps).toBe(1); // 0+1
+  });
+
+  it("cuts off loan/reserve sections after the squad begins", () => {
+    expect(efs.players.some((p) => p.displayName === "Loaned Away")).toBe(false);
+    expect(efs.players).toHaveLength(4);
+  });
+
+  it("parses fb si squads with nested templates and specific position codes", () => {
+    const fbsi = parseSquadPage(SQUAD_PAGE_FBSI);
+    expect(fbsi.players).toHaveLength(2);
+    expect(fbsi.players[0]).toMatchObject({ displayName: "Old Keeper", pos: "GK", nationality: "CMR", shirt: 1 });
+    expect(fbsi.players[1].pos).toBe("RB");
+    expect(fbsi.players[1].continentalApps).toBeNull(); // ambiguous scope: never guessed
+  });
+
+  it("reports anomalies for pages without squad templates", () => {
+    const broken = parseSquadPage("== Nothing here ==");
+    expect(broken.players).toHaveLength(0);
+    expect(broken.anomalies).toContain("no squad-list templates found");
+  });
+});
 
 describe("parseFinalsList", () => {
   it("parses rows across both competition eras", () => {

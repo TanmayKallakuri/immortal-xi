@@ -32,8 +32,12 @@ export interface GamePlayerSeason {
   shirt: number | null;
   nationality: string | null; // flag code from source, e.g. "ESP"
   captain: boolean;
-  role: "starter" | "sub" | "bench";
+  /** evidence tier: lineup roles for finalists, "squad" for squad-list teams */
+  role: "starter" | "sub" | "bench" | "squad";
   finalGoals: number;
+  /** European appearances/goals that season, where the source carries them */
+  seasonApps: number | null;
+  seasonGoals: number | null;
   careerFinals: number; // finals this player appears in across the dataset
   careerFinalWins: number;
   ratings: PlayerRatings;
@@ -52,7 +56,16 @@ export interface GameClubSeason {
   year: number; // season end year, 1960
   eraLabel: string; // "1950s" ... "2020s"
   competition: "EC" | "UCL";
-  progression: "W" | "RU"; // how far this club-season went (dataset currently covers finalists)
+  /** how far this club-season went: W | RU | SF | QF | R16 | GS | PART */
+  progression: string;
+  /** factual/curated category: champion, runner_up, semi_finalist,
+   *  quarter_finalist, round_of_16, group_stage, group_stage_iconic,
+   *  league_phase_iconic, participant, ... */
+  category: string;
+  /** curated flavor tags: upset_team, cult_team, high_xg_or_eye_test_team,
+   *  historic_giant_killer, domestic_legend_in_europe, collapse_iconic,
+   *  data_incomplete_but_iconic */
+  tags: string[];
   finalScore: string;
   opponentClubName: string;
   teamStrength: number; // 0..100 derived band for opponents/draft weighting
@@ -93,6 +106,14 @@ export interface QualitySummary {
   blockedSources: number;
   flagsByType: Record<string, number>;
   coverageByDecade: Record<string, number>;
+  /** all club-seasons by category */
+  categoryDistribution: Record<string, number>;
+  /** draftable club-seasons by category */
+  draftableByCategory: Record<string, number>;
+  /** draftable club-seasons by era */
+  draftableByEra: Record<string, number>;
+  /** draftable club-seasons by strength band (S/A/B/C) */
+  strengthBands: Record<string, number>;
   nextCleanupTasks: string[];
 }
 

@@ -4,7 +4,7 @@
  * two-legged knockouts and a single neutral final. No away goals; extra time
  * and penalties where ties are level. Deterministic from the share seed.
  */
-import { createRng, type Rng } from "../rng";
+import { createRng, cmp, type Rng } from "../rng";
 import type { GameDataIndex } from "../data/game-data";
 import type { GameClubSeason, GamePlayerSeason } from "../types";
 import { SIM_VERSION } from "./version";
@@ -103,7 +103,7 @@ export function drawOpponents(rng: Rng, index: GameDataIndex, excludeClubSeasonI
   const pool = index.data.clubSeasons
     .filter((c) => !excludeClubSeasonIds.has(c.id))
     .slice()
-    .sort((a, b) => b.teamStrength - a.teamStrength || a.id.localeCompare(b.id));
+    .sort((a, b) => b.teamStrength - a.teamStrength || cmp(a.id, b.id));
   // strongest 300 candidates keep the field at UCL level, then split into pots
   const candidates = pool.slice(0, 300);
   const potSize = Math.floor(candidates.length / 4);
@@ -239,7 +239,7 @@ export function simulateCampaign(payload: SeedPayload, players: GamePlayerSeason
     else row.lost++;
   }
   rows.push({ name: userSide.name, isUser: true, played: 8, won: w, drawn: d, lost: l, gf, ga, points });
-  rows.sort((a, b) => b.points - a.points || (b.gf - b.ga) - (a.gf - a.ga) || b.gf - a.gf || a.name.localeCompare(b.name));
+  rows.sort((a, b) => b.points - a.points || (b.gf - b.ga) - (a.gf - a.ga) || b.gf - a.gf || cmp(a.name, b.name));
   const rank = rows.findIndex((r) => r.isUser) + 1;
 
   const result: CampaignResult = {

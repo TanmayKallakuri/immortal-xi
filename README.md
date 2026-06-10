@@ -2,16 +2,16 @@
 
 **Draft the team history never allowed. Then find out if it could actually win the thing.**
 
-Immortal XI is a browser game built on the full history of the European Cup and UEFA Champions League, 1955/56 to today. Eleven spins of the archive each land on a real club-season — Reims 1956, Celtic 1967, Steaua 1986, Ajax 1995, PSG 2025 — and you take exactly one player from that actual squad. When your eleven is signed, the engine throws them into a full modern-format Champions League campaign: 36-team league phase, knockout play-off, two-legged ties, a one-night final. Extra time. Penalties. Heartbreak or immortality.
+Immortal XI is a browser game built on the full history of the European Cup and UEFA Champions League, 1955/56 to today. Eleven spins of the archive each land on a real club-season — Reims 1956, Celtic 1967, Steaua 1986, Deportivo 2004, Ajax 2019 — and you take exactly one player from that actual squad. You never know how a team finished that season until your eleven is signed (and in **Hard Mode** you don't even see ratings — just names, positions and your own football memory). Then the engine throws your XI into a full modern-format Champions League campaign, revealed **one match at a time**: 36-team league phase, knockout play-off, two-legged ties, a one-night final. Extra time. Penalties. Heartbreak or immortality.
 
-Every finished team produces a **share seed** — a short string that reconstructs your exact XI and replays your exact campaign on anyone's machine. Paste two seeds into **Head-to-Head** and settle whose immortals are better: one-off final, two-legged tie, or a best-of-7 fantasy series. Same seeds, same mode, same result, every time. No arguments — well, fewer arguments.
+Every finished team gets a **6-character share code** (plus a portable full seed) that reconstructs your exact XI and replays your exact campaign. Paste two codes into **Head-to-Head** and settle whose immortals are better: one-off final, two-legged tie, or a best-of-7 fantasy series. Same seeds, same mode, same result, every time. No arguments — well, fewer arguments.
 
 ## What it feels like
 
-- The reel lands on **Real Madrid 1959/60** and you have to choose between Di Stéfano, Puskás and Gento — knowing you can probably never pick the other two again.
-- It lands on **Malmö FF 1979** and you grin, because four cult-club picks unlock the *Underdog Collector* badge and a giant-killer story.
-- It lands on **Real Madrid 2016/17** when you already have Gento, and suddenly two eras of the same club share a dressing room (*Same-Club Era Collision* — rare by design).
-- Your back line is 1960s, your midfield is 1990s, your striker is from last season — and the league phase doesn't care. Survive it or go home.
+- The archive flips past a dozen ghosts and lands on **Real Madrid 1959/60** — Di Stéfano, Puskás or Gento, knowing you can probably never pick the other two again.
+- It lands on **Deportivo 2003/04** or **APOEL 2011/12** and you grin, because the pool isn't just champions anymore — semi-finalists, quarter-finalists, cult teams and iconic collapses are all in the reel, and four cult-club picks unlock the *Underdog Collector* badge.
+- In **Hard Mode** it lands on **Dynamo Kyiv 1998/99** and there are no numbers to hide behind. You either know who Shevchenko's strike partner was, or you don't.
+- Your campaign unfolds match by match — a 94th-minute equalizer in leg two, aggregate level, extra time, penalties — and nobody told you the ending in advance. Survive it or go home.
 
 ## Quick start
 
@@ -35,12 +35,13 @@ The repo ships without data by design — `npm run pipeline` builds the dataset 
 | `npm run clean` | derive the canonical layer: clubs, players, squads, matches, flags |
 | `npm run export-game-data` | compute ratings + write `public/game-data.json` |
 | `npm run data-quality-report` | regenerate the data room report |
-| `npm run pipeline` | all four pipeline stages in order |
+| `npm run rating-audit` | global audit for structurally suspicious ratings (fails on HIGH findings) |
+| `npm run pipeline` | all five pipeline stages in order |
 
 ## How it stays honest
 
-- **Real data only.** Finals, scores, lineups and scorers are parsed from cited public sources; 6,600+ real match results give the opponent pool its strength bands. Nothing historical is fabricated — gaps become visible quality flags, not invented facts.
-- **Explainable ratings.** Every rating is computed from observed evidence (role in the final, goals, captaincy, career finals) with the formula in version-controlled code. The handful of manual overrides for consensus legends are stored separately with reasons and dates, and displayed openly in the **Data Room**.
+- **Real data only.** Finals, scores, lineups, scorers and squad lists are parsed from cited public sources; 6,600+ real match results give the opponent pool its strength bands; curated iconic teams (Ajax 2019, Monaco 2017, Roma 2018, …) come with their actual Wikipedia squad lists — several with per-player European appearance and goal stats. Nothing historical is fabricated — gaps become visible quality flags, not invented facts.
+- **Explainable, season-honest ratings.** Every rating is computed from that player-season's observed evidence (role in the final, goals, that season's European apps where sourced) with all weights in one config file. Career trophy counts cannot inflate a season's overall — they live in aura, capped — and a global audit script hunts the "squad player outranks the star" bug class on every pipeline run. Manual overrides for consensus legends are stored separately with reasons and dates, displayed openly in the **Data Room**.
 - **Deterministic everything.** Drafts, campaigns and battles are seeded simulations. Seeds carry data + simulation versions and a checksum; incompatible or edited seeds are rejected with a clear message instead of replaying wrong.
 - **No borrowed identity.** No UEFA branding, no club crests, no player photos. The look is original: midnight archive, chalk serif, brass foil.
 

@@ -5,16 +5,21 @@
  * stream for a round is derived from (draft seed, round number, every prior
  * spin and pick), so the same seed + same choices always reproduce the same
  * sequence, while different choices branch the timeline deterministically.
+ * Mode (classic/hard) changes what the UI shows, never the spins.
  *
  * Weight inputs (docs/DECISIONS.md):
- *   data confidence, squad completeness, historical significance (W vs RU),
- *   era coverage vs already-drafted decades, club diversity (repeat-club
- *   penalty), cult-team bonus, superclub damping, strength-band mixing.
+ *   data confidence, squad completeness, historical significance (mild),
+ *   strength-band diversity, category diversity, era coverage vs drafted
+ *   decades, club diversity (repeat-club penalty), cult-team bonus,
+ *   superclub damping. A club-season that offers zero selectable players is
+ *   excluded outright, so a spin can never land on a dead round.
  */
 import { createRng } from "../rng";
 import type { GameDataIndex } from "../data/game-data";
 import type { GameClubSeason, GamePlayerSeason } from "../types";
-import { formationById, positionFit, type Formation, type FormationSlot } from "./formations";
+import { formationById, slotFit, ineligibleReason, type Formation, type FormationSlot } from "./formations";
+
+export type DraftMode = "classic" | "hard";
 
 export interface DraftPick {
   slotId: string;
@@ -27,18 +32,24 @@ export interface DraftPick {
 export interface DraftState {
   draftSeed: string;
   formationId: string;
+  mode: DraftMode;
   round: number; // 0-based; round === 11 means draft complete
   picks: DraftPick[];
   spunClubSeasonIds: string[]; // every club-season already spun this draft
 }
 
-export function newDraft(draftSeed: string, formationId: string): DraftState {
+export function newDraft(draftSeed: string, formationId: string, mode: DraftMode = "classic"): DraftState {
   if (!formationById(formationId)) throw new Error(`unknown formation ${formationId}`);
-  return { draftSeed, formationId, round: 0, picks: [], spunClubSeasonIds: [] };
+  return { draftSeed, formationId, mode, round: 0, picks: [], spunClubSeasonIds: [] };
 }
 
 export const REPEAT_CLUB_PENALTY = 0.22;
 export const MAX_SAME_CLUB = 2;
+
+/** strength band used for draft diversity (mirrors the data report) */
+export function bandOf(teamStrength: number): "S" | "A" | "B" | "C" {
+  return teamStrength >= 84 ? "S" : teamStrength >= 78 ? "A" : teamStrength >= 72 ? "B" : "C";
+}
 
 export interface SpinResult {
   clubSeason: GameClubSeason;
@@ -50,7 +61,7 @@ export interface SpinResult {
 export interface SelectablePlayer {
   player: GamePlayerSeason;
   eligibleSlots: Array<{ slot: FormationSlot; fit: number }>;
-  blockedReason: string | null; // e.g. "already in your XI"
+  blockedReason: string | null; // e.g. "Already in your XI", "Forward slots full"
 }
 
 export function openSlots(state: DraftState, formation: Formation): FormationSlot[] {
@@ -75,13 +86,11 @@ export function selectablePlayers(
     .filter(Boolean)
     .map((player) => {
       const eligibleSlots = open
-        .map((slot) => ({ slot, fit: positionFit(player.posGroup, slot) }))
+        .map((slot) => ({ slot, fit: slotFit(player.pos, player.posGroup, slot) }))
         .filter((e) => e.fit > 0);
       const blockedReason = usedPlayerIds.has(player.playerId)
-        ? "already in your XI"
-        : eligibleSlots.length === 0
-          ? "no compatible open position"
-          : null;
+        ? "Already in your XI"
+        : ineligibleReason(player.pos, player.posGroup, open);
       return { player, eligibleSlots, blockedReason };
     });
 }
@@ -98,22 +107,34 @@ export function spinWeight(
   const repeats = clubCount(state, cs.clubId);
   if (repeats >= MAX_SAME_CLUB) return { weight: 0, parts: { clubCap: 0 } };
 
-  // must offer at least one selectable player
+  // must offer at least one selectable player — no dead rounds, ever
   const anySelectable = selectablePlayers(cs, state, index).some((p) => !p.blockedReason);
   if (!anySelectable) return { weight: 0, parts: { noSelectablePlayer: 0 } };
 
-  const confidence = cs.confidence.score; // 0.55 - 0.92
+  const confidence = cs.confidence.score;
   parts.confidence = confidence;
   const completeness = Math.min(1, cs.playerSeasonIds.length / 16);
   parts.completeness = 0.7 + 0.3 * completeness;
-  const significance = cs.progression === "W" ? 1.15 : 1.0;
+
+  // historical significance: champions only mildly favored — drama over power
+  const significance = cs.category === "champion" ? 1.05 : 1.0;
   parts.significance = significance;
 
-  const pickedDecades = new Set(
-    state.picks.map((p) => index.clubSeasonById.get(p.clubSeasonId)?.eraLabel ?? ""),
-  );
+  const pickedSeasons = state.picks.map((p) => index.clubSeasonById.get(p.clubSeasonId)).filter(Boolean) as GameClubSeason[];
+
+  const pickedDecades = new Set(pickedSeasons.map((p) => p.eraLabel));
   const eraBoost = pickedDecades.has(cs.eraLabel) ? 0.8 : 1.5;
   parts.eraCoverage = eraBoost;
+
+  // strength-band diversity: pull the draft across power tiers
+  const pickedBands = new Set(pickedSeasons.map((p) => bandOf(p.teamStrength)));
+  const bandBoost = pickedBands.has(bandOf(cs.teamStrength)) ? 0.85 : 1.3;
+  parts.bandDiversity = bandBoost;
+
+  // category diversity: mix champions with semi-finalists, upsets, cult teams
+  const pickedCategories = new Set(pickedSeasons.map((p) => p.category));
+  const categoryBoost = pickedCategories.has(cs.category) ? 0.9 : 1.25;
+  parts.categoryDiversity = categoryBoost;
 
   const clubDiversity = repeats === 0 ? 1 : REPEAT_CLUB_PENALTY;
   parts.clubDiversity = clubDiversity;
@@ -125,7 +146,15 @@ export function spinWeight(
   parts.superclubDamp = superclubDamp;
 
   const weight =
-    confidence * parts.completeness * significance * eraBoost * clubDiversity * cult * superclubDamp;
+    confidence *
+    parts.completeness *
+    significance *
+    eraBoost *
+    bandBoost *
+    categoryBoost *
+    clubDiversity *
+    cult *
+    superclubDamp;
   return { weight, parts };
 }
 
@@ -181,8 +210,8 @@ export function applyPick(
   if (state.picks.some((p) => p.playerId === player.playerId)) {
     throw new Error(`${player.name} is already in your XI`);
   }
-  if (positionFit(player.posGroup, slot) <= 0) {
-    throw new Error(`${player.name} (${player.posGroup}) cannot play ${slot.label}`);
+  if (slotFit(player.pos, player.posGroup, slot) <= 0) {
+    throw new Error(`${player.name} (${player.pos}) cannot play ${slot.label}`);
   }
   return {
     ...state,

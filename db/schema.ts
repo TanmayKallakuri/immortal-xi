@@ -86,7 +86,9 @@ export const clubSeasons = sqliteTable("club_seasons", {
   id: text("id").primaryKey(), // "cs-real-madrid-1959-60"
   clubId: text("club_id").notNull(),
   seasonId: text("season_id").notNull(),
-  progression: text("progression").notNull(), // W | RU
+  progression: text("progression").notNull(), // W | RU | SF | QF | R16 | GS | PART
+  category: text("category").notNull().default("participant"), // see lib/types.ts ClubSeasonCategory
+  tags: text("tags").notNull().default("[]"), // JSON string[]
   finalScore: text("final_score"),
   squadComplete: integer("squad_complete", { mode: "boolean" }).notNull().default(false),
   starterCount: integer("starter_count").notNull().default(0),
@@ -124,8 +126,10 @@ export const playerSeasons = sqliteTable("player_seasons", {
   shirt: integer("shirt"),
   nationality: text("nationality"),
   captain: integer("captain", { mode: "boolean" }).notNull().default(false),
-  role: text("role").notNull(), // starter | sub | bench
+  role: text("role").notNull(), // starter | sub | bench | squad
   finalGoals: integer("final_goals").notNull().default(0),
+  continentalApps: integer("continental_apps"), // European apps that season (squad-list stats)
+  continentalGoals: integer("continental_goals"),
   confidenceScore: real("confidence_score").notNull().default(0),
   confidenceLabel: text("confidence_label").notNull().default("low"),
   needsReview: integer("needs_review", { mode: "boolean" }).notNull().default(false),

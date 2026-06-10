@@ -1,15 +1,16 @@
 "use client";
 
-import { Suspense, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { GameDataProvider, useGameData, ArchiveLoading } from "@/components/GameDataProvider";
 import { Pitch } from "@/components/Pitch";
 import { RatingBar } from "@/components/Bars";
 import { decodeSeed } from "@/lib/draft/seed";
+import { saveSeed, localStorageRegistry, resolveSeedInput } from "@/lib/draft/code";
 import { formationById } from "@/lib/draft/formations";
 import { SIM_VERSION } from "@/lib/simulation/version";
-import { simulateCampaign, type CampaignResult, type PlayedMatch } from "@/lib/simulation/campaign";
+import { simulateCampaign, type CampaignResult, type PlayedMatch, type KnockoutTie } from "@/lib/simulation/campaign";
 import { detectBadges } from "@/lib/simulation/badges";
 
 export default function ResultPage() {
@@ -22,12 +23,12 @@ export default function ResultPage() {
   );
 }
 
-function CopyButton({ text, label }: { text: string; label: string }) {
+function CopyButton({ text, label, primary = false }: { text: string; label: string; primary?: boolean }) {
   const [copied, setCopied] = useState(false);
   return (
     <button
       type="button"
-      className="btn-ghost"
+      className={primary ? "btn-brass" : "btn-ghost"}
       onClick={async () => {
         await navigator.clipboard.writeText(text);
         setCopied(true);
@@ -39,10 +40,44 @@ function CopyButton({ text, label }: { text: string; label: string }) {
   );
 }
 
+/** The campaign as an ordered list of reveal steps — suspense by default. */
+interface Step {
+  kind: "league" | "table" | "tie-intro" | "leg" | "verdict";
+  leagueIndex?: number;
+  tie?: KnockoutTie;
+  legIndex?: number;
+}
+
+function buildSteps(campaign: CampaignResult): Step[] {
+  const steps: Step[] = [];
+  campaign.leagueMatches.forEach((_, i) => steps.push({ kind: "league", leagueIndex: i }));
+  steps.push({ kind: "table" });
+  for (const tie of campaign.knockout) {
+    tie.legs.forEach((_, legIndex) => steps.push({ kind: "leg", tie, legIndex }));
+  }
+  steps.push({ kind: "verdict" });
+  return steps;
+}
+
 function ResultInner() {
   const { index, error } = useGameData();
   const params = useSearchParams();
-  const seed = params.get("seed") ?? "";
+
+  // accept ?seed=<full> or ?c=<compact code resolved from this device>
+  const rawSeed = params.get("seed") ?? "";
+  const codeParam = params.get("c") ?? "";
+  const [resolved, setResolved] = useState<{ seed: string | null; error?: string } | null>(null);
+  useEffect(() => {
+    if (rawSeed) {
+      setResolved({ seed: rawSeed });
+    } else if (codeParam) {
+      const r = resolveSeedInput(codeParam, localStorageRegistry());
+      setResolved({ seed: r.seed, error: r.error });
+    } else {
+      setResolved({ seed: null });
+    }
+  }, [rawSeed, codeParam]);
+  const seed = resolved?.seed ?? "";
 
   const computed = useMemo(() => {
     if (!index || !seed) return null;
@@ -50,21 +85,52 @@ function ResultInner() {
     if (!decoded.ok) return { error: decoded.error } as const;
     const campaign = simulateCampaign(decoded.payload, decoded.players, index);
     const badges = detectBadges(campaign, decoded.players, index);
-    return { decoded, campaign, badges } as const;
+    return { decoded, campaign, badges, steps: buildSteps(campaign) } as const;
   }, [index, seed]);
 
+  // compact code for sharing (saved locally; deterministic per seed)
+  const [code, setCode] = useState<string | null>(null);
+  useEffect(() => {
+    if (seed && computed && !("error" in computed)) {
+      try {
+        setCode(saveSeed(seed, localStorageRegistry()));
+      } catch {
+        setCode(null);
+      }
+    }
+  }, [seed, computed]);
+
+  // progressive reveal — starts sealed; the user kicks the campaign off
+  const [revealedCount, setRevealedCount] = useState(0);
+  const [autoplay, setAutoplay] = useState(false);
+  const autoplayRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const total = computed && !("error" in computed) ? computed.steps.length : 0;
+  useEffect(() => {
+    if (autoplay && revealedCount < total) {
+      autoplayRef.current = setInterval(() => setRevealedCount((n) => Math.min(total, n + 1)), 1700);
+      return () => {
+        if (autoplayRef.current) clearInterval(autoplayRef.current);
+      };
+    }
+  }, [autoplay, revealedCount, total]);
+
   if (error) return <ArchiveLoading label={`archive error: ${error}`} />;
-  if (!index) return <ArchiveLoading />;
+  if (!index || resolved === null) return <ArchiveLoading />;
   if (!seed)
     return (
       <div className="card p-8">
+        <p className="kicker mb-2">{resolved.error ? "code not found" : "no seed"}</p>
         <p className="text-(--color-chalk-dim)">
-          No seed supplied. <Link className="text-(--color-brass) underline" href="/draft">Draft an XI</Link> first, or paste a
-          seed into <Link className="text-(--color-brass) underline" href="/h2h">Head-to-Head</Link>.
+          {resolved.error ?? (
+            <>
+              No seed supplied. <Link className="text-(--color-brass) underline" href="/draft">Draft an XI</Link> first, or paste a
+              seed into <Link className="text-(--color-brass) underline" href="/h2h">Head-to-Head</Link>.
+            </>
+          )}
         </p>
       </div>
     );
-  if (!computed) return <ArchiveLoading label="Replaying the campaign…" />;
+  if (!computed) return <ArchiveLoading label="Preparing the campaign…" />;
   if ("error" in computed)
     return (
       <div className="card border-(--color-blood) p-8">
@@ -73,58 +139,47 @@ function ResultInner() {
       </div>
     );
 
-  const { decoded, campaign, badges } = computed;
+  const { decoded, campaign, badges, steps } = computed;
   const formation = formationById(decoded.payload.formationId)!;
-  const champion = ["champion", "unbeaten-champion", "perfect-champion"].includes(campaign.outcome);
+  const finished = revealedCount >= steps.length;
+  const visibleSteps = steps.slice(0, revealedCount);
   const r = campaign.leagueRecord;
-  const shareUrl = typeof window !== "undefined" ? `${window.location.origin}/result?seed=${encodeURIComponent(seed)}` : "";
+  const champion = ["champion", "unbeaten-champion", "perfect-champion"].includes(campaign.outcome);
+  const shareUrl =
+    typeof window !== "undefined"
+      ? code
+        ? `${window.location.origin}/result?c=${code}`
+        : `${window.location.origin}/result?seed=${encodeURIComponent(seed)}`
+      : "";
 
   return (
-    <div className="space-y-8 pt-2">
-      {/* outcome hero */}
-      <section className={`card card-foil rise overflow-hidden p-6 sm:p-10 ${champion ? "border-(--color-brass)" : ""}`}>
-        <p className="kicker">{champion ? "glory, recorded forever" : "the campaign verdict"}</p>
-        <h1
-          className={`mt-2 text-4xl font-semibold tracking-tight sm:text-6xl ${
-            champion ? "text-(--color-brass)" : campaign.outcome === "runner-up" ? "text-(--color-chalk)" : "text-(--color-chalk-dim)"
-          }`}
-        >
-          {campaign.outcomeLabel}
-        </h1>
-        <p className="font-mono mt-4 text-sm text-(--color-chalk-dim)">
-          league phase {r.w}W–{r.d}D–{r.l}L · {r.gf}:{r.ga} · {r.points} pts · finished {r.rank} of 36
-          {campaign.knockout.length > 0 && ` · ${campaign.knockout.filter((t) => t.won).length} knockout ties won`}
-        </p>
-        {badges.length > 0 && (
-          <div className="mt-5 flex flex-wrap gap-2">
-            {badges.map((b) => (
-              <span
-                key={b.id}
-                title={b.description}
-                className={`font-mono rounded-full border px-3 py-1 text-[0.65rem] uppercase tracking-wider ${
-                  b.tier === "gold"
-                    ? "border-(--color-brass) text-(--color-brass)"
-                    : b.tier === "silver"
-                      ? "border-(--color-chalk-dim) text-(--color-chalk)"
-                      : "border-(--color-line) text-(--color-chalk-dim)"
-                }`}
-              >
-                {b.name}
-              </span>
-            ))}
+    <div className="space-y-6 pt-2">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="kicker">
+            the campaign · {decoded.payload.mode === "hard" ? "hard mode" : "classic"} · sim v{SIM_VERSION}
+          </p>
+          <h1 className="mt-1 text-2xl font-semibold tracking-tight sm:text-3xl">
+            {finished ? campaign.outcomeLabel : "One match at a time."}
+          </h1>
+        </div>
+        {!finished && (
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className="btn-brass" onClick={() => setRevealedCount((n) => Math.min(steps.length, n + 1))}>
+              {revealedCount === 0 ? "Kick off →" : "Next →"}
+            </button>
+            <button type="button" className="btn-ghost" onClick={() => setAutoplay(!autoplay)} aria-pressed={autoplay}>
+              {autoplay ? "Pause" : "Autoplay"}
+            </button>
+            <button type="button" className="btn-ghost" onClick={() => setRevealedCount(steps.length)}>
+              Skip to verdict
+            </button>
           </div>
         )}
-        <div className="mt-6 flex flex-wrap gap-2">
-          <CopyButton text={seed} label="Copy share seed" />
-          {shareUrl && <CopyButton text={shareUrl} label="Copy result link" />}
-          <Link href={`/h2h?a=${encodeURIComponent(seed)}`} className="btn-brass">
-            Challenge this XI →
-          </Link>
-        </div>
-      </section>
+      </div>
 
-      <div className="grid gap-6 lg:grid-cols-[1fr_1.2fr]">
-        {/* the XI */}
+      <div className="grid gap-6 lg:grid-cols-[1fr_1.4fr]">
+        {/* the XI (sticky context) */}
         <section className="space-y-3">
           <p className="kicker">the eleven</p>
           <Pitch
@@ -145,109 +200,181 @@ function ResultInner() {
           </div>
         </section>
 
-        {/* the story */}
-        <section className="space-y-4">
-          <p className="kicker">the campaign</p>
+        {/* the story, one step at a time */}
+        <section className="space-y-3">
+          <p className="kicker">
+            the campaign · step {Math.min(revealedCount, steps.length)} of {steps.length}
+          </p>
 
-          <div className="card p-5">
-            <h3 className="mb-3 font-semibold">League phase</h3>
-            <ul className="space-y-1.5">
-              {campaign.leagueMatches.map((m) => (
-                <MatchRow key={m.label} m={m} />
-              ))}
-            </ul>
-            <LeagueTable campaign={campaign} />
-          </div>
+          {visibleSteps.map((step, i) => {
+            const latest = i === visibleSteps.length - 1;
+            if (step.kind === "league") {
+              const m = campaign.leagueMatches[step.leagueIndex!];
+              return <MatchCard key={`L${step.leagueIndex}`} m={m} highlight={latest} defaultOpen={latest} />;
+            }
+            if (step.kind === "table") {
+              return <TableCard key="table" campaign={campaign} highlight={latest} />;
+            }
+            if (step.kind === "leg") {
+              const tie = step.tie!;
+              const m = tie.legs[step.legIndex!];
+              const isLastLeg = step.legIndex === tie.legs.length - 1;
+              return (
+                <div key={`${tie.round}-${step.legIndex}`}>
+                  {step.legIndex === 0 && (
+                    <p className="kicker mt-2 mb-2">
+                      {tie.round === "r16" ? "round of 16" : tie.round === "qf" ? "quarter-final" : tie.round === "sf" ? "semi-final" : tie.round === "playoff" ? "knockout play-off" : "the final"}{" "}
+                      · vs {tie.opponentName}
+                    </p>
+                  )}
+                  <MatchCard m={m} highlight={latest} defaultOpen={latest} />
+                  {isLastLeg && tie.legs.length === 2 && (
+                    <p className="font-mono mt-1 text-right text-[0.68rem] uppercase tracking-wider text-(--color-chalk-dim)">
+                      aggregate {tie.aggregate[0]}–{tie.aggregate[1]}
+                      {tie.pens ? ` · pens ${tie.pens[0]}–${tie.pens[1]}` : ""} ·{" "}
+                      <span className={tie.won ? "text-(--color-grass-bright)" : "text-(--color-blood)"}>
+                        {tie.won ? "through" : "out"}
+                      </span>
+                    </p>
+                  )}
+                  {isLastLeg && tie.round === "final" && tie.pens && (
+                    <p className="font-mono mt-1 text-right text-[0.68rem] uppercase tracking-wider text-(--color-chalk-dim)">
+                      penalties {tie.pens[0]}–{tie.pens[1]}
+                    </p>
+                  )}
+                </div>
+              );
+            }
+            // verdict
+            return (
+              <VerdictCard
+                key="verdict"
+                campaign={campaign}
+                badges={badges}
+                champion={champion}
+                code={code}
+                seed={seed}
+                shareUrl={shareUrl}
+                mode={decoded.payload.mode}
+              />
+            );
+          })}
 
-          {campaign.knockout.map((tie) => (
-            <div key={tie.round} className={`card p-5 ${tie.round === "final" ? "card-foil" : ""}`}>
-              <div className="mb-3 flex items-baseline justify-between">
-                <h3 className="font-semibold capitalize">
-                  {tie.round === "r16" ? "Round of 16" : tie.round === "qf" ? "Quarter-final" : tie.round === "sf" ? "Semi-final" : tie.round === "playoff" ? "Knockout play-off" : "Final"}
-                </h3>
-                <span className={`font-mono text-xs uppercase tracking-wider ${tie.won ? "text-(--color-grass-bright)" : "text-(--color-blood)"}`}>
-                  {tie.won ? "through" : "out"} {tie.legs.length === 2 ? `· agg ${tie.aggregate[0]}–${tie.aggregate[1]}` : ""}
-                  {tie.pens ? ` · pens ${tie.pens[0]}–${tie.pens[1]}` : ""}
-                </span>
-              </div>
-              <ul className="space-y-1.5">
-                {tie.legs.map((m) => (
-                  <MatchRow key={m.label} m={m} withEvents />
-                ))}
-              </ul>
-            </div>
-          ))}
-
-          <div className="card p-5">
-            <h3 className="mb-3 font-semibold">Key moments</h3>
-            <ol className="relative space-y-3 border-l border-(--color-line) pl-4">
-              {campaign.keyMoments.map((k, i) => (
-                <li key={i} className="text-sm text-(--color-chalk-dim)">
-                  <span className="absolute -left-[5px] mt-1.5 inline-block h-2 w-2 rounded-full bg-(--color-brass)" />
-                  <span className="font-mono mr-2 text-[0.62rem] uppercase tracking-wider text-(--color-brass)">{k.stage}</span>
-                  {k.text}
-                </li>
-              ))}
-            </ol>
-          </div>
+          {!finished && revealedCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setRevealedCount((n) => Math.min(steps.length, n + 1))}
+              className="card w-full p-4 text-center font-mono text-[0.7rem] uppercase tracking-[0.2em] text-(--color-brass) transition hover:border-(--color-brass)"
+            >
+              {steps[revealedCount].kind === "verdict"
+                ? "Hear the final whistle →"
+                : steps[revealedCount].kind === "table"
+                  ? "See the league table →"
+                  : "Next match →"}
+            </button>
+          )}
+          {!finished && (
+            <p className="font-mono text-center text-[0.6rem] uppercase tracking-[0.2em] text-(--color-chalk-faint)">
+              record so far stays sealed — that&apos;s the point
+            </p>
+          )}
         </section>
       </div>
     </div>
   );
 }
 
-function MatchRow({ m, withEvents = false }: { m: PlayedMatch; withEvents?: boolean }) {
-  const [open, setOpen] = useState(false);
+/* ---------------- cards ---------------- */
+
+function MatchCard({ m, highlight, defaultOpen }: { m: PlayedMatch; highlight?: boolean; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(!!defaultOpen);
   const won = m.userGoals > m.oppGoals;
   const drew = m.userGoals === m.oppGoals;
+  const venue = m.label.includes("(H)") ? "home" : m.label.includes("(A)") ? "away" : "neutral venue";
+  const goals = m.result.events.filter((e) => e.type === "goal" || e.type === "penalty-goal");
   return (
-    <li className="rounded border border-(--color-line) bg-(--color-ink)">
+    <div className={`card overflow-hidden ${highlight ? "spin-reel border-(--color-brass-soft)" : ""}`}>
       <button
         type="button"
         onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between gap-3 px-3 py-2 text-left"
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left"
         aria-expanded={open}
       >
-        <span className="font-mono w-24 shrink-0 text-[0.62rem] uppercase tracking-wider text-(--color-chalk-faint)">
+        <span className="font-mono w-28 shrink-0 text-[0.62rem] uppercase tracking-wider text-(--color-chalk-faint)">
           {m.label}
         </span>
-        <span className="flex-1 truncate text-sm text-(--color-chalk-dim)">{m.opponentName}</span>
+        <span className="flex-1 truncate text-sm text-(--color-chalk-dim)">
+          {m.opponentName} <span className="text-(--color-chalk-faint)">· {venue}</span>
+        </span>
         <span
-          className={`font-mono text-sm font-semibold ${won ? "text-(--color-grass-bright)" : drew ? "text-(--color-chalk-dim)" : "text-(--color-blood)"}`}
+          className={`font-mono score-tick text-base font-semibold ${won ? "text-(--color-grass-bright)" : drew ? "text-(--color-chalk-dim)" : "text-(--color-blood)"}`}
         >
           {m.userGoals}–{m.oppGoals}
+          {m.result.pens ? " (p)" : m.result.etGoals ? " (aet)" : ""}
         </span>
       </button>
       {open && (
-        <ul className="ticket-edge space-y-1 px-3 py-2">
+        <ul className="ticket-edge space-y-1 px-4 py-2.5">
           <li className="font-mono text-[0.6rem] uppercase tracking-wider text-(--color-chalk-faint)">
-            xG {m.home ? m.result.xg[0] : m.result.xg[1]} – {m.home ? m.result.xg[1] : m.result.xg[0]}
+            xG {m.home ? m.result.xg[0] : m.result.xg[1]} – {m.home ? m.result.xg[1] : m.result.xg[0]} · {goals.length} goals
           </li>
-          {m.result.events.length === 0 && (
-            <li className="text-xs text-(--color-chalk-faint)">A quiet, tactical affair.</li>
+          {timelineWithMarkers(m).map((e, i) =>
+            e === "HT" || e === "FT" || e === "ET" ? (
+              <li key={`m${i}`} className="font-mono text-[0.58rem] uppercase tracking-[0.25em] text-(--color-chalk-faint)">
+                — {e === "HT" ? "half-time" : e === "FT" ? "full-time" : "extra time"} —
+              </li>
+            ) : (
+              <li key={i} className="text-xs text-(--color-chalk-dim)">
+                <span className="font-mono mr-2 text-(--color-brass)">{e.minute}&apos;</span>
+                {e.text}
+              </li>
+            ),
           )}
-          {m.result.events.map((e, i) => (
-            <li key={i} className="text-xs text-(--color-chalk-dim)">
-              <span className="font-mono mr-2 text-(--color-brass)">{e.minute}&apos;</span>
-              {e.text}
-            </li>
-          ))}
+          {m.result.events.length === 0 && <li className="text-xs text-(--color-chalk-faint)">A quiet, tactical affair.</li>}
         </ul>
       )}
-      {withEvents && !open && m.result.events.length > 0 && (
-        <div className="ticket-edge font-mono px-3 py-1.5 text-[0.6rem] text-(--color-chalk-faint)">
-          {m.result.events.filter((e) => e.type.includes("goal")).length} goals · tap for the timeline
-        </div>
-      )}
-    </li>
+    </div>
   );
 }
 
-function LeagueTable({ campaign }: { campaign: CampaignResult }) {
+type TimelineItem = PlayedMatch["result"]["events"][number] | "HT" | "FT" | "ET";
+function timelineWithMarkers(m: PlayedMatch): TimelineItem[] {
+  const out: TimelineItem[] = [];
+  let htDone = false;
+  let ftDone = false;
+  for (const e of m.result.events) {
+    if (!htDone && e.minute > 45) {
+      out.push("HT");
+      htDone = true;
+    }
+    if (!ftDone && e.minute > 90) {
+      if (!htDone) {
+        out.push("HT");
+        htDone = true;
+      }
+      out.push("FT", "ET");
+      ftDone = true;
+    }
+    out.push(e);
+  }
+  return out;
+}
+
+function TableCard({ campaign, highlight }: { campaign: CampaignResult; highlight?: boolean }) {
   const [open, setOpen] = useState(false);
+  const r = campaign.leagueRecord;
+  const verdictText =
+    r.rank <= 8 ? "straight into the round of 16" : r.rank <= 24 ? "into the knockout play-off" : "eliminated — 25th or below";
   return (
-    <div className="mt-3">
-      <button type="button" className="btn-ghost w-full" onClick={() => setOpen(!open)} aria-expanded={open}>
+    <div className={`card p-5 ${highlight ? "spin-reel border-(--color-brass-soft)" : ""}`}>
+      <p className="kicker mb-2">league phase complete</p>
+      <p className="text-lg font-semibold">
+        {r.w}W–{r.d}D–{r.l}L · {r.gf}:{r.ga} · {r.points} pts —{" "}
+        <span className={r.rank <= 24 ? "text-(--color-grass-bright)" : "text-(--color-blood)"}>
+          finished {r.rank} of 36, {verdictText}
+        </span>
+      </p>
+      <button type="button" className="btn-ghost mt-3 w-full" onClick={() => setOpen(!open)} aria-expanded={open}>
         {open ? "Hide" : "Show"} full 36-team table
       </button>
       {open && (
@@ -287,5 +414,82 @@ function LeagueTable({ campaign }: { campaign: CampaignResult }) {
         </div>
       )}
     </div>
+  );
+}
+
+function VerdictCard({
+  campaign,
+  badges,
+  champion,
+  code,
+  seed,
+  shareUrl,
+  mode,
+}: {
+  campaign: CampaignResult;
+  badges: ReturnType<typeof detectBadges>;
+  champion: boolean;
+  code: string | null;
+  seed: string;
+  shareUrl: string;
+  mode: string;
+}) {
+  const r = campaign.leagueRecord;
+  return (
+    <section className={`card card-foil spin-reel overflow-hidden p-6 sm:p-8 ${champion ? "border-(--color-brass)" : ""}`}>
+      <p className="kicker">{champion ? "glory, recorded forever" : "the final verdict"}</p>
+      <h2
+        className={`mt-2 text-3xl font-semibold tracking-tight sm:text-5xl ${
+          champion ? "text-(--color-brass)" : campaign.outcome === "runner-up" ? "text-(--color-chalk)" : "text-(--color-chalk-dim)"
+        }`}
+      >
+        {campaign.outcomeLabel}
+      </h2>
+      <p className="font-mono mt-3 text-sm text-(--color-chalk-dim)">
+        league phase {r.w}W–{r.d}D–{r.l}L · {r.gf}:{r.ga} · rank {r.rank} of 36
+        {campaign.knockout.length > 0 && ` · ${campaign.knockout.filter((t) => t.won).length} knockout ties won`}
+        {mode === "hard" && " · drafted blind in hard mode"}
+      </p>
+      {badges.length > 0 && (
+        <div className="mt-4 flex flex-wrap gap-2">
+          {badges.map((b) => (
+            <span
+              key={b.id}
+              title={b.description}
+              className={`font-mono rounded-full border px-3 py-1 text-[0.65rem] uppercase tracking-wider ${
+                b.tier === "gold"
+                  ? "border-(--color-brass) text-(--color-brass)"
+                  : b.tier === "silver"
+                    ? "border-(--color-chalk-dim) text-(--color-chalk)"
+                    : "border-(--color-line) text-(--color-chalk-dim)"
+              }`}
+            >
+              {b.name}
+            </span>
+          ))}
+        </div>
+      )}
+      <div className="mt-5 space-y-3">
+        {code && (
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-mono rounded border border-(--color-brass) bg-(--color-ink) px-4 py-2 text-xl tracking-[0.25em] text-(--color-brass)">
+              {code}
+            </span>
+            <CopyButton text={code} label="Copy code" primary />
+            {shareUrl && <CopyButton text={shareUrl} label="Copy link" />}
+            <Link href={`/h2h?a=${encodeURIComponent(code)}`} className="btn-ghost">
+              Challenge this XI →
+            </Link>
+          </div>
+        )}
+        <details className="font-mono text-[0.6rem] leading-relaxed text-(--color-chalk-faint)">
+          <summary className="cursor-pointer uppercase tracking-[0.2em]">
+            portable seed (works on any device)
+          </summary>
+          <p className="mt-1 break-all">{seed}</p>
+          <CopyButton text={seed} label="Copy full seed" />
+        </details>
+      </div>
+    </section>
   );
 }

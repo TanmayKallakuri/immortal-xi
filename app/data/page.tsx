@@ -101,6 +101,37 @@ export default function DataPage() {
             ))}
           </div>
         </div>
+        <div className="mt-3 grid gap-3 sm:grid-cols-3">
+          {(
+            [
+              ["draftable pool by category", s.draftableByCategory],
+              ["draftable pool by strength band", s.strengthBands],
+              ["draftable pool by era", s.draftableByEra],
+            ] as Array<[string, Record<string, number>]>
+          ).map(([title, data]) => {
+            const max = Math.max(1, ...Object.values(data ?? {}));
+            return (
+              <div key={title} className="card p-4">
+                <p className="font-mono mb-2 text-[0.6rem] uppercase tracking-[0.18em] text-(--color-chalk-faint)">
+                  {title}
+                </p>
+                <ul className="space-y-1.5">
+                  {Object.entries(data ?? {}).map(([k, n]) => (
+                    <li key={k} className="flex items-center gap-2">
+                      <span className="font-mono w-32 shrink-0 truncate text-[0.62rem] text-(--color-chalk-dim)">
+                        {k.replace(/_/g, " ")}
+                      </span>
+                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-(--color-line)">
+                        <div className="h-full bg-(--color-brass)" style={{ width: `${(n / max) * 100}%` }} />
+                      </div>
+                      <span className="font-mono w-7 shrink-0 text-right text-[0.62rem] text-(--color-chalk)">{n}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
+        </div>
       </section>
 
       <section>

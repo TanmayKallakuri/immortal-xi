@@ -26,6 +26,7 @@ export interface MatchEvent {
   side: 0 | 1;
   text: string;
   scorerName?: string;
+  assistName?: string;
 }
 
 export interface MatchResult {
@@ -73,6 +74,16 @@ function pickScorer(rng: Rng, side: SideInput): string | undefined {
   return rng.weighted(outfield, weights).name;
 }
 
+/** Plausible assister: creators weighted by control+attack; never the scorer. */
+function pickAssister(rng: Rng, side: SideInput, scorerName: string | undefined): string | undefined {
+  if (!side.scorers || side.scorers.length === 0) return undefined;
+  if (rng.next() > 0.72) return undefined; // some goals are unassisted
+  const creators = side.scorers.filter((p) => p.posGroup !== "GK" && p.name !== scorerName);
+  if (creators.length === 0) return undefined;
+  const weights = creators.map((p) => Math.max(1, p.ratings.control * 0.6 + p.ratings.attack * 0.4 - 45));
+  return rng.weighted(creators, weights).name;
+}
+
 function goalText(rng: Rng, scorer: string | undefined, team: string, minute: number): string {
   const generic = [
     `${team} carve through and finish coolly`,
@@ -114,14 +125,16 @@ function simulatePeriod(
       const minute = Math.min(mEnd, Math.round(mStart + rng.next() * span + lateBias * span * rng.next()));
       const isPen = rng.next() < 0.11;
       const scorer = pickScorer(rng, input);
+      const assist = isPen ? undefined : pickAssister(rng, input, scorer);
       events.push({
         minute,
         type: isPen ? "penalty-goal" : "goal",
         side,
         scorerName: scorer,
+        assistName: assist,
         text: isPen
           ? `${scorer ?? input.name} converts from the spot`
-          : goalText(rng, scorer, input.name, minute),
+          : goalText(rng, scorer, input.name, minute) + (assist ? ` (assist: ${assist})` : ""),
       });
     }
   };

@@ -98,9 +98,18 @@ export function createRng(seed: string): Rng {
   return rng;
 }
 
-/** Stable 32-bit hash of a string, as unsigned int. Used for checksums. */
+/** Stable 32-bit hash of a string, as unsigned int. Used for checksums.
+ *  (32 bits is fine for tamper-detection of locally shared seeds; a hosted
+ *  registry storing millions of seeds should move to a wider digest.) */
 export function hash32(str: string): number {
   return xmur3(str)();
+}
+
+/** Locale-INDEPENDENT string comparison (UTF-16 code-unit order).
+ *  Use this — never localeCompare — anywhere a sort feeds seeded randomness
+ *  or deterministic output, so results match across system locales. */
+export function cmp(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** Stable short base36 fingerprint of arbitrary content. */

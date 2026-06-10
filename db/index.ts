@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS club_aliases (
 );
 CREATE TABLE IF NOT EXISTS club_seasons (
   id TEXT PRIMARY KEY, club_id TEXT NOT NULL, season_id TEXT NOT NULL, progression TEXT NOT NULL,
+  category TEXT NOT NULL DEFAULT 'participant', tags TEXT NOT NULL DEFAULT '[]',
   final_score TEXT, squad_complete INTEGER NOT NULL DEFAULT 0, starter_count INTEGER NOT NULL DEFAULT 0,
   player_count INTEGER NOT NULL DEFAULT 0, has_goalkeeper INTEGER NOT NULL DEFAULT 0,
   confidence_score REAL NOT NULL DEFAULT 0, confidence_label TEXT NOT NULL DEFAULT 'low',
@@ -60,7 +61,8 @@ CREATE TABLE IF NOT EXISTS player_seasons (
   id TEXT PRIMARY KEY, player_id TEXT NOT NULL, club_season_id TEXT NOT NULL,
   pos TEXT NOT NULL, pos_group TEXT NOT NULL, pos_inferred INTEGER NOT NULL DEFAULT 0,
   shirt INTEGER, nationality TEXT, captain INTEGER NOT NULL DEFAULT 0, role TEXT NOT NULL,
-  final_goals INTEGER NOT NULL DEFAULT 0, confidence_score REAL NOT NULL DEFAULT 0,
+  final_goals INTEGER NOT NULL DEFAULT 0, continental_apps INTEGER, continental_goals INTEGER,
+  confidence_score REAL NOT NULL DEFAULT 0,
   confidence_label TEXT NOT NULL DEFAULT 'low', needs_review INTEGER NOT NULL DEFAULT 0,
   review_reason TEXT, source_record_id TEXT
 );
@@ -117,6 +119,15 @@ CREATE INDEX IF NOT EXISTS idx_goals_match ON goals(match_id);
 `;
 
 export type Db = BetterSQLite3Database<typeof schema>;
+
+/** Canonical-layer tables: rebuildable from raw; dropped + recreated by clean. */
+export const CANONICAL_TABLES = [
+  "competitions", "seasons", "rounds", "clubs", "club_aliases", "club_seasons",
+  "players", "player_aliases", "player_seasons", "squads", "matches",
+  "appearances", "goals", "positions", "ratings", "data_quality_flags", "manual_overrides",
+] as const;
+
+export { DDL };
 
 export function openDb(): { db: Db; sqlite: Database.Database } {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });

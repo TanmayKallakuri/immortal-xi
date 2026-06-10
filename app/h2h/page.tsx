@@ -5,7 +5,8 @@ import { useSearchParams } from "next/navigation";
 import { GameDataProvider, useGameData, ArchiveLoading } from "@/components/GameDataProvider";
 import { Pitch } from "@/components/Pitch";
 import { CompareBar } from "@/components/Bars";
-import { decodeSeed } from "@/lib/draft/seed";
+import { decodeSeed, type SeedDecodeResult } from "@/lib/draft/seed";
+import { resolveSeedInput, localStorageRegistry, type CodeRegistry } from "@/lib/draft/code";
 import { formationById } from "@/lib/draft/formations";
 import { SIM_VERSION } from "@/lib/simulation/version";
 import {
@@ -28,21 +29,30 @@ export default function H2hPage() {
   );
 }
 
+/** Accepts a 6-7 char compact code (resolved on this device) or a full seed. */
+function decodeInput(value: string, index: GameDataIndex, registry: CodeRegistry): SeedDecodeResult | null {
+  const t = value.trim();
+  if (!t) return null;
+  const r = resolveSeedInput(t, registry);
+  if (r.error) return { ok: false, error: r.error };
+  if (!r.seed) return null;
+  return decodeSeed(r.seed, index, SIM_VERSION);
+}
+
 function SeedInput({
   label,
   value,
   onChange,
   index,
+  registry,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   index: GameDataIndex;
+  registry: CodeRegistry;
 }) {
-  const state = useMemo(() => {
-    if (!value.trim()) return null;
-    return decodeSeed(value, index, SIM_VERSION);
-  }, [value, index]);
+  const state = useMemo(() => decodeInput(value, index, registry), [value, index, registry]);
 
   return (
     <div className="card card-foil p-5">
@@ -51,7 +61,7 @@ function SeedInput({
         <textarea
           value={value}
           onChange={(e) => onChange(e.target.value)}
-          placeholder="paste a share seed (IX1.…)"
+          placeholder="paste a share code (e.g. K7M2XQ) or a full seed (IX2.…)"
           rows={3}
           className="font-mono mt-2 w-full resize-none rounded-md border border-(--color-line) bg-(--color-ink) px-3 py-2.5 text-xs leading-relaxed text-(--color-chalk) placeholder:text-(--color-chalk-faint)"
         />
@@ -62,7 +72,8 @@ function SeedInput({
       {state?.ok && (
         <div className="mt-3">
           <p className="font-mono text-[0.65rem] uppercase tracking-wider text-(--color-grass-bright)">
-            ✓ valid · {formationById(state.payload.formationId)?.name} · key {state.payload.draftSeed}
+            ✓ valid · {formationById(state.payload.formationId)?.name} ·{" "}
+            {state.payload.mode === "hard" ? "hard mode" : "classic"} · key {state.payload.draftSeed}
           </p>
           <p className="mt-1 truncate text-xs text-(--color-chalk-dim)">
             {state.players.map((p) => p.name).join(" · ")}
@@ -81,12 +92,13 @@ function H2hInner() {
   const [mode, setMode] = useState<BattleMode>("final");
   const [battle, setBattle] = useState<{ result: H2hResult; a: H2hSide; b: H2hSide } | null>(null);
   const [copied, setCopied] = useState(false);
+  const registry = useMemo(() => localStorageRegistry(), []);
 
   if (error) return <ArchiveLoading label={`archive error: ${error}`} />;
   if (!index) return <ArchiveLoading />;
 
-  const decA = seedA.trim() ? decodeSeed(seedA, index, SIM_VERSION) : null;
-  const decB = seedB.trim() ? decodeSeed(seedB, index, SIM_VERSION) : null;
+  const decA = decodeInput(seedA, index, registry);
+  const decB = decodeInput(seedB, index, registry);
   const ready = decA?.ok && decB?.ok;
 
   const fight = () => {
@@ -108,8 +120,8 @@ function H2hInner() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-2">
-        <SeedInput label="seed a — alpha xi" value={seedA} onChange={setSeedA} index={index} />
-        <SeedInput label="seed b — beta xi" value={seedB} onChange={setSeedB} index={index} />
+        <SeedInput label="code a — alpha xi" value={seedA} onChange={setSeedA} index={index} registry={registry} />
+        <SeedInput label="code b — beta xi" value={seedB} onChange={setSeedB} index={index} registry={registry} />
       </div>
 
       <div className="flex flex-wrap items-center gap-3">

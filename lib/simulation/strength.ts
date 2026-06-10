@@ -4,7 +4,7 @@
  */
 import type { GameDataIndex } from "../data/game-data";
 import type { GamePlayerSeason } from "../types";
-import { formationById, positionFit, fineFit, type Formation } from "../draft/formations";
+import { formationById, slotFit, type Formation } from "../draft/formations";
 
 export interface XiSlotAssignment {
   slotId: string;
@@ -51,9 +51,9 @@ export function computeTeamProfile(
   for (const a of assignments) {
     const slot = slotById.get(a.slotId);
     if (!slot) throw new Error(`assignment to unknown slot ${a.slotId}`);
-    const fit = positionFit(a.player.posGroup, slot) * fineFit(a.player.pos, slot);
+    const fit = slotFit(a.player.pos, a.player.posGroup, slot);
     if (fit <= 0) throw new Error(`invalid XI: ${a.player.name} in ${slot.id}`);
-    fitSum += Math.min(fit, 1.04);
+    fitSum += fit;
     const r = a.player.ratings;
     const g = slot.group;
     atkNum += r.attack * fit * ATTACK_W[g];
@@ -133,18 +133,18 @@ export function computeTeamProfile(
   // severe position mismatches
   for (const a of assignments) {
     const slot = slotById.get(a.slotId)!;
-    const fit = positionFit(a.player.posGroup, slot);
-    if (fit > 0 && fit <= 0.7) {
+    const fit = slotFit(a.player.pos, a.player.posGroup, slot);
+    if (fit > 0 && fit <= 0.8) {
       chem -= 3;
       links.push({
         kind: "mismatch-penalty",
-        detail: `${a.player.name} (${a.player.posGroup}) at ${slot.label}`,
+        detail: `${a.player.name} (${a.player.pos}) at ${slot.label}`,
         value: -3,
       });
     }
   }
   const avgFit = fitSum / 11;
-  if (avgFit >= 0.97) {
+  if (avgFit >= 0.96) {
     chem += 2;
     links.push({ kind: "shape", detail: "balanced formation", value: 2 });
   }

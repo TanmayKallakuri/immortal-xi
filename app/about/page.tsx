@@ -18,15 +18,40 @@ const sections: Array<{ title: string; body: React.ReactNode }> = [
     title: "Where the data comes from",
     body: (
       <>
-        Historical facts (finals, scores, lineups, scorers, match results) are ingested from public sources: Wikipedia
-        final articles and the finals list (CC BY-SA factual records), and the footballcsv open dataset of European Cup
-        match results (public domain). Sources that could not be used — UEFA.com (restrictive terms, JS-rendered),
-        Kaggle (auth required), FBref (terms restrict scraping) — are registered and visibly marked as blocked in the{" "}
+        Historical facts (finals, scores, lineups, scorers, match results, squad lists) are ingested from public
+        sources: Wikipedia final articles and the finals list (CC BY-SA factual records), Wikipedia club-season
+        articles for curated iconic non-finalists — Ajax 2018/19, Monaco 2016/17, Deportivo 2003/04, APOEL 2011/12 and
+        more, several with per-player European appearance and goal stats — and the footballcsv open dataset of match
+        results (public domain). Sources that could not be used — UEFA.com (restrictive terms, JS-rendered), Kaggle
+        (auth required), FBref (terms restrict scraping) — are registered and visibly marked as blocked in the{" "}
         <Link href="/data" className="text-(--color-brass) underline decoration-(--color-line) underline-offset-4">
           data room
         </Link>
         . Raw payloads are preserved verbatim; canonical records carry source references, retrieval dates, parser
-        versions and confidence scores. Missing data becomes a quality flag, never an invention.
+        versions, category tags and confidence scores. Missing data becomes a quality flag, never an invention.
+      </>
+    ),
+  },
+  {
+    title: "Modes and what they hide",
+    body: (
+      <>
+        In every mode, how a team finished that season (champion, runner-up, semi-finalist…) is hidden while you draft
+        — knowing the ending would spoil the spin. Classic Mode shows full player cards: ratings, season stats, roles,
+        data confidence. Hard Mode strips the cards to name, position, club, season and nationality — pure football
+        memory — and reveals everything only once your XI is signed. The simulation always uses the real hidden
+        ratings, and the mode is encoded in your share seed so reconstructions are faithful.
+      </>
+    ),
+  },
+  {
+    title: "Share codes",
+    body: (
+      <>
+        Every finished XI gets a 6-character share code (alphabet without 0/O/1/I/l) plus a full portable seed. Codes
+        are stored locally in your browser and resolve instantly on the same device; the full seed works anywhere and
+        is embedded in copied battle results. A hosted registry that makes short codes portable across devices is the
+        natural next step and the storage interface is already in place.
       </>
     ),
   },

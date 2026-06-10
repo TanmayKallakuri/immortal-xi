@@ -96,6 +96,16 @@ const CLUB_ALIAS_MAP: Record<string, CanonicalClub> = (() => {
     ["tottenham-hotspur", "Tottenham Hotspur", "England", ["tottenham hotspur", "tottenham hotspur fc", "tottenham hotspur f c", "tottenham"]],
     ["dinamo-zagreb", "Dinamo Zagreb", "Croatia", ["dinamo zagreb", "gnk dinamo zagreb"]],
     ["rangers", "Rangers", "Scotland", ["rangers", "rangers fc", "rangers f c"]],
+    // curated iconic non-finalists (stable ids across curation + match data)
+    ["atalanta", "Atalanta", "Italy", ["atalanta", "atalanta bc", "atalanta b c", "atalanta bergamo"]],
+    ["villarreal", "Villarreal", "Spain", ["villarreal", "villarreal cf", "villarreal c f"]],
+    ["deportivo-la-coruna", "Deportivo La Coruña", "Spain", ["deportivo de la coruna", "deportivo la coruna", "rc deportivo de la coruna", "rc deportivo", "deportivo"]],
+    ["malaga", "Málaga", "Spain", ["malaga", "malaga cf", "malaga c f"]],
+    ["apoel", "APOEL", "Cyprus", ["apoel", "apoel fc", "apoel f c", "apoel nicosia"]],
+    ["dynamo-kyiv", "Dynamo Kyiv", "Ukraine", ["dynamo kyiv", "fc dynamo kyiv", "dynamo kiev", "dinamo kiev", "dinamo kyiv"]],
+    ["shakhtar-donetsk", "Shakhtar Donetsk", "Ukraine", ["shakhtar donetsk", "fc shakhtar donetsk", "shakhtar"]],
+    ["galatasaray", "Galatasaray", "Turkey", ["galatasaray", "galatasaray sk", "galatasaray s k"]],
+    ["napoli", "Napoli", "Italy", ["napoli", "ssc napoli", "s s c napoli"]],
   ];
   const map: Record<string, CanonicalClub> = {};
   for (const [id, name, country, aliases] of defs) {

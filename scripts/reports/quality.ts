@@ -22,6 +22,33 @@ export function buildQualitySummary(sqlite: Database.Database): QualitySummary {
     coverageByDecade[row.decade] = row.n;
   }
 
+  const dist = (sql: string): Record<string, number> => {
+    const out: Record<string, number> = {};
+    for (const row of sqlite.prepare(sql).all() as Array<{ k: string; n: number }>) out[row.k] = row.n;
+    return out;
+  };
+  const categoryDistribution = dist(
+    "SELECT category k, COUNT(*) n FROM club_seasons GROUP BY category ORDER BY n DESC",
+  );
+  const draftableByCategory = dist(
+    "SELECT category k, COUNT(*) n FROM club_seasons WHERE squad_complete = 1 GROUP BY category ORDER BY n DESC",
+  );
+  const draftableByEra = dist(
+    `SELECT (CAST(s.end_year / 10 AS INTEGER) * 10) || 's' AS k, COUNT(*) n
+     FROM club_seasons c JOIN seasons s ON s.id = c.season_id
+     WHERE c.squad_complete = 1 GROUP BY k ORDER BY k`,
+  );
+  // strength bands mirror lib/draft/engine.ts bandOf(): S>=84, A>=78, B>=72, C below
+  const strengthBands = dist(
+    `SELECT CASE
+       WHEN category = 'champion' THEN 'S (champion-grade)'
+       WHEN category = 'runner_up' THEN 'A (finalist-grade)'
+       WHEN category IN ('semi_finalist','quarter_finalist') THEN 'B (deep-run)'
+       ELSE 'C (iconic/other)'
+     END k, COUNT(*) n
+     FROM club_seasons WHERE squad_complete = 1 GROUP BY k ORDER BY k`,
+  );
+
   const blockedSources = sqlite
     .prepare("SELECT id, status_note FROM sources WHERE status = 'blocked'")
     .all() as Array<{ id: string; status_note: string }>;
@@ -43,7 +70,15 @@ export function buildQualitySummary(sqlite: Database.Database): QualitySummary {
   const dupes = flagsByType["duplicate-candidate"] ?? 0;
   if (dupes > 0) nextCleanupTasks.push(`${dupes} duplicate candidates to review`);
   for (const b of blockedSources) nextCleanupTasks.push(`source ${b.id} blocked: ${b.status_note.slice(0, 90)}`);
-  nextCleanupTasks.push("extend squad coverage beyond finalists (semi-finalist lineups) to widen the draft pool");
+  const squadListOnly = one(
+    "SELECT COUNT(*) n FROM club_seasons WHERE squad_complete = 1 AND review_reason LIKE 'squad-list%'",
+  );
+  if (squadListOnly > 0) {
+    nextCleanupTasks.push(
+      `${squadListOnly} iconic teams carry squad-list evidence only — ingest per-player UCL stats to sharpen their ratings`,
+    );
+  }
+  nextCleanupTasks.push("extend curated coverage: add more iconic non-finalists to data/curation/iconic-club-seasons.json");
 
   return {
     totalSeasons: one("SELECT COUNT(*) n FROM seasons"),
@@ -63,6 +98,10 @@ export function buildQualitySummary(sqlite: Database.Database): QualitySummary {
     blockedSources: blockedSources.length,
     flagsByType,
     coverageByDecade,
+    categoryDistribution,
+    draftableByCategory,
+    draftableByEra,
+    strengthBands,
     nextCleanupTasks,
   };
 }

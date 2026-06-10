@@ -57,6 +57,17 @@ export const SOURCE_DEFS: SourceDef[] = [
     internalDerivationOnly: false,
   },
   {
+    id: "wikipedia-club-season-pages",
+    name: "Wikipedia: club-season articles for curated iconic teams (squad lists)",
+    url: "https://en.wikipedia.org/wiki/2018%E2%80%9319_AFC_Ajax_season",
+    dataType: "wikitext",
+    parser: "club-season-page",
+    confidenceLevel: "medium",
+    licenseNote: "CC BY-SA 4.0 (text); factual squad records derived",
+    redistributable: true,
+    internalDerivationOnly: false,
+  },
+  {
     id: "footballcsv-cl",
     name: "footballcsv: europe-champions-league match results",
     url: "https://github.com/footballcsv/europe-champions-league",

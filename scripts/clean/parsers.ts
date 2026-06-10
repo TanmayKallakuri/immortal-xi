@@ -5,6 +5,7 @@
  * expected shape becomes a parse anomaly (surfaced as a data quality flag),
  * never a guess. Parser version is recorded on every source record.
  */
+import { posToGroup } from "../../lib/identity/normalize";
 
 export interface FinalsListRow {
   seasonRaw: string; // "1955–56"
@@ -118,6 +119,156 @@ export function parseFinalsList(wikitext: string): { rows: FinalsListRow[]; anom
   }
   if (rows.length < 60) anomalies.push(`finals list parsed only ${rows.length} rows; expected 65+`);
   return { rows, anomalies };
+}
+
+// ---------------------------------------------------------------------------
+// Club-season article squad parsing ({{fs player}} / {{football squad player}})
+// ---------------------------------------------------------------------------
+
+export interface SquadListPlayer {
+  shirt: number | null;
+  nationality: string | null;
+  pos: string; // GK | DF | MF | FW as given by the template
+  linkTarget: string | null;
+  displayName: string;
+  /** continental (European) appearances that season, where the article's
+   *  stats table carries them ({{Efs player}}); null = not available */
+  continentalApps: number | null;
+  continentalGoals: number | null;
+}
+
+export interface ParsedSquadPage {
+  players: SquadListPlayer[];
+  /** true when per-player European stats were extracted */
+  hasSeasonStats: boolean;
+  anomalies: string[];
+}
+
+/** Split a template body into top-level parts (brace/bracket aware). */
+function splitTemplateBody(body: string): string[] {
+  const parts: string[] = [];
+  let depth = 0;
+  let cur = "";
+  for (let i = 0; i < body.length; i++) {
+    const c = body[i];
+    const next = body[i + 1];
+    if (c === "{" && next === "{") depth++;
+    if (c === "}" && next === "}") depth--;
+    if (c === "[" && next === "[") depth++;
+    if (c === "]" && next === "]") depth--;
+    if (c === "|" && depth === 0) {
+      parts.push(cur);
+      cur = "";
+    } else {
+      cur += c;
+    }
+  }
+  parts.push(cur);
+  return parts;
+}
+
+/** "17+1" (starts+sub appearances) -> 18; "34" -> 34 */
+function parseApps(cell: string): number | null {
+  const m = cell.trim().match(/^(\d+)(?:\s*\+\s*(\d+))?$/);
+  if (!m) return null;
+  return parseInt(m[1], 10) + (m[2] ? parseInt(m[2], 10) : 0);
+}
+
+/**
+ * Parse the first-team squad from a Wikipedia club-season article.
+ *
+ * Handles two template families:
+ *  - {{fs player|no=|nat=|pos=|name=}}: squad membership only.
+ *  - {{Efs player|no=|nat=|pos=|name=| <stat cells> }}: membership + season
+ *    statistics. Cells come in (apps, goals) pairs per competition; the
+ *    European pair is the LAST pair when 3 pairs are present (league, cup,
+ *    europe) and the third pair when 4+ are present (…, europe, total).
+ *
+ * Sections for reserves / loans / departures are cut off before parsing.
+ * Anything off-shape becomes an anomaly, never a guess.
+ */
+export function parseSquadPage(wikitext: string): ParsedSquadPage {
+  const anomalies: string[] = [];
+  const players: SquadListPlayer[] = [];
+  const seen = new Set<string>();
+
+  // Cut at the first non-first-team section heading AFTER the squad list
+  // begins (transfer sections often precede the squad in these articles).
+  const TPL_START = /\{\{\s*(efs player|fs player|football squad player|fb si player)\b/gi;
+  const firstTpl = wikitext.search(/\{\{\s*(?:efs player|fs player|football squad player|fb si player)\b/i);
+  let scope = wikitext;
+  if (firstTpl >= 0) {
+    const after = wikitext.slice(firstTpl);
+    const cutMatch = after.match(
+      /^=+\s*(?:out on loan|on loan|loaned out|reserves?(?: squad| team)?|academy|youth|b team|left (?:the club|during)|transfers)\b[^=]*=+\s*$/im,
+    );
+    if (cutMatch && cutMatch.index !== undefined) {
+      scope = wikitext.slice(0, firstTpl + cutMatch.index);
+    }
+  }
+  let m: RegExpExecArray | null;
+  let statRows = 0;
+  while ((m = TPL_START.exec(scope)) !== null) {
+    // brace-matched extraction: rows may nest templates ({{Age|...}} etc.)
+    const tpl = extractTemplate(scope, m.index);
+    if (!tpl) continue;
+    TPL_START.lastIndex = m.index + tpl.length;
+    const isEfs = m[1].toLowerCase().startsWith("efs");
+    const parts = splitTemplateBody(tpl.slice(2, -2)).slice(1); // [0] is the template name
+    const named: Record<string, string> = {};
+    const positional: string[] = [];
+    for (const part of parts) {
+      const eq = part.indexOf("=");
+      if (eq > -1 && /^[a-z]+\s*$/i.test(part.slice(0, eq))) {
+        named[part.slice(0, eq).trim().toLowerCase()] = part.slice(eq + 1).trim();
+      } else if (part.trim()) {
+        positional.push(part.trim());
+      }
+    }
+    const nameRaw = named["name"] ?? named["p"];
+    if (!nameRaw) continue;
+    const link = nameRaw.match(/\[\[([^|\]]+)(?:\|([^\]]*))?\]\]/);
+    const displayName = (link ? (link[2] ?? link[1]) : nameRaw.replace(/\{\{[^}]*\}\}/g, "")).trim();
+    if (!displayName) continue;
+    const posRaw = (named["pos"] ?? "").toUpperCase().replace(/[^A-Z]/g, "");
+    // group codes (GK/DF/MF/FW) or specific codes (RB, CB, DM, ST, ...)
+    if (!["GK", "DF", "MF", "FW"].includes(posRaw) && !posToGroup(posRaw).confident) {
+      anomalies.push(`unrecognized squad position "${posRaw}" for ${displayName}`);
+      continue;
+    }
+    const key = link ? link[1].trim() : displayName;
+    if (seen.has(key)) continue; // some articles repeat the squad table
+    seen.add(key);
+
+    let continentalApps: number | null = null;
+    let continentalGoals: number | null = null;
+    if (isEfs && positional.length >= 4 && positional.length % 2 === 0) {
+      const pairs: Array<[string, string]> = [];
+      for (let i = 0; i < positional.length; i += 2) pairs.push([positional[i], positional[i + 1]]);
+      // 3 pairs: league/cup/europe -> last; 4+ pairs: assume total last -> third
+      const europePair = pairs.length <= 3 ? pairs[pairs.length - 1] : pairs[2];
+      continentalApps = parseApps(europePair[0]);
+      continentalGoals = parseApps(europePair[1]);
+      if (continentalApps !== null) statRows++;
+    }
+
+    const noRaw = named["no"] ?? named["n"];
+    const natRaw = named["nat"] ?? named["nb"];
+    players.push({
+      shirt: noRaw && /^\d{1,2}$/.test(noRaw) ? parseInt(noRaw, 10) : null,
+      nationality: natRaw ? natRaw.replace(/[^A-Za-z]/g, "").toUpperCase().slice(0, 3) || null : null,
+      pos: posRaw,
+      linkTarget: link ? link[1].trim() : null,
+      displayName,
+      continentalApps,
+      continentalGoals,
+    });
+  }
+  if (players.length === 0) anomalies.push("no squad-list templates found");
+  else if (players.length < 11) anomalies.push(`only ${players.length} squad players parsed`);
+  if (players.length > 30) anomalies.push(`${players.length} squad players parsed — section cutoff may have missed`);
+  if (players.length > 0 && !players.some((p) => p.pos === "GK")) anomalies.push("no goalkeeper in squad list");
+  return { players, hasSeasonStats: statRows >= 8, anomalies };
 }
 
 // ---------------------------------------------------------------------------

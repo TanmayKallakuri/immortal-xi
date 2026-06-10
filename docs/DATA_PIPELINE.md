@@ -38,7 +38,8 @@ Principles:
 | --- | --- | --- | --- |
 | Wikipedia finals list | ok | every final 1956→latest: season, finalists, score, venue, attendance | CC BY-SA; factual records |
 | Wikipedia final articles (~71 pages) | ok | full lineups (positions, shirt numbers, captains, subs), scorers + minutes, match details | CC BY-SA; factual records |
-| footballcsv (europe-champions-league) | ok | 61 seasons of complete match results → opponent pool + round-reached strength | public domain (CC0) |
+| Wikipedia club-season articles (20 pages, curated) | ok | first-team squads for iconic non-finalists; per-player European apps/goals where the article's `{{Efs player}}` stats table carries them | CC BY-SA; factual records |
+| footballcsv (europe-champions-league) | ok | 61 seasons of complete match results → opponent pool + round-reached categories | public domain (CC0) |
 | UEFA.com | **blocked** | — (JS-rendered, restrictive terms; manual cross-check only) | proprietary |
 | Kaggle datasets | **blocked** | — (requires authenticated API) | per-dataset |
 | FBref | **blocked** | — (terms restrict automated scraping; skipped by policy) | proprietary |
@@ -63,6 +64,15 @@ Confidence **never lowers a rating** — it widens simulation variance and raise
 ## Quality flags you'll see
 
 `missing-squad`, `starter-count`, `missing-goalkeeper`, `duplicate-in-squad`, `duplicate-candidate`, `impossible-squad` (>30 parsed), `position-inferred`, `name-only-identity`, `parse-anomaly`, `scorer-not-in-squad`, `lineup-attributed-by-order`, `club-fallback-normalization`, `override-target-missing`. The report (`npm run data-quality-report`) aggregates them and prints the recommended cleanup queue.
+
+## Categories + curation
+
+Every club-season carries a `category` (and optional `tags`):
+
+- **derived**: `champion` / `runner_up` from the finals list; `semi_finalist` / `quarter_finalist` / `round_of_16` / `group_stage` / `participant` from round reached in match data
+- **curated**: `data/curation/iconic-club-seasons.json` overrides categories and adds tags (`upset_team`, `cult_team`, `high_xg_or_eye_test_team`, `historic_giant_killer`, `domestic_legend_in_europe`, `collapse_iconic`, `data_incomplete_but_iconic`) and, for non-finalists, names the Wikipedia club-season article whose squad list to ingest
+
+**Adding an iconic team** is one JSON entry + `npm run pipeline`. Three squad-template families are parsed (`{{fs player}}`, `{{Efs player}}` incl. European stat columns, `{{fb si player}}`); reserve/loan/transfer sections are cut off; unparseable pages leave the team category-only and visibly flagged (e.g. Leeds 2000/01 uses a bare wikitable and is the one shipped entry without a squad).
 
 ## Adding a new source
 
